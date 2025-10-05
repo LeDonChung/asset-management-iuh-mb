@@ -353,7 +353,7 @@ export const classifyRfids = createAsyncThunk(
   "inventory/classifyRfids",
   async (data: ClassifyRfidsRequest, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post('/assets/rfid/classify', data);
+      const response = await axiosInstance.post('/api/v1/assets/rfid/classify', data);
       return response.data as ClassifyRfidsResponse;
     } catch (error: any) {
       return rejectWithValue(error.response?.data || error.message);
