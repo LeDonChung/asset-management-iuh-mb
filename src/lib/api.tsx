@@ -5,7 +5,7 @@ import { API_TIMEOUT, API_URL } from '@env'
 
 // Create axios instance
 export const axiosInstance = axios.create({
-  baseURL: 'http://192.168.1.24:3000',
+  baseURL: 'http://192.168.1.30:3000',
   headers: {
     'Content-Type': 'application/json',
   },

@@ -118,6 +118,51 @@ export interface ClassifyRfidsResponse {
   otherRooms: Asset[];
   unknowns: string[];
 }
+
+// Adjacent Inventory Types
+export interface AdjacentAssetInventoryDetail {
+  assetId: string;
+  roomId: string;
+  systemQuantity: number;
+  countedQuantity: number;
+  scanMethod: ScanMethod;
+  status: AssetActionStatus;
+  note?: string;
+  imageUrls?: string[];
+  assetType: string;
+  // Additional metadata for asset restoration
+  ktCode?: string;
+  name?: string;
+  roomCode?: string;
+  rfidTag?: string;
+}
+
+export interface RoomAdjacentResult {
+  roomId: string;
+  result: AdjacentAssetInventoryDetail[];
+}
+
+export interface SaveTempAdjacentInventoryRequest {
+  roomResults: RoomAdjacentResult[];
+  note?: string;
+  ttlSeconds?: number;
+}
+
+export interface TempAdjacentInventoryResponse {
+  roomResults: RoomAdjacentResult[];
+  note?: string;
+  createdAt: string;
+  expiresAt: string;
+  ttl: number;
+  totalRooms: number;
+  totalAssets: number;
+  matchedAssets: number;
+  missingAssets: number;
+  excessAssets: number;
+  brokenAssets: number;
+  needsRepairAssets: number;
+  liquidationProposedAssets: number;
+}
 interface InventoryState {
   // Inventory perform states
   assignedInventories: InventorySession[];
@@ -161,6 +206,13 @@ interface InventoryState {
   classifyRfidsResult: ClassifyRfidsResponse | null;
   classifyRfidsLoading: boolean;
   classifyRfidsError: string | null;
+
+  // Adjacent inventory results state
+  adjacentTempResults: TempAdjacentInventoryResponse | null;
+  adjacentTempResultsLoading: boolean;
+  adjacentTempResultsError: string | null;
+  saveAdjacentTempResultsLoading: boolean;
+  deleteAdjacentTempResultsLoading: boolean;
 }
 
 const initialState: InventoryState = {
@@ -216,6 +268,13 @@ const initialState: InventoryState = {
   classifyRfidsResult: null,
   classifyRfidsLoading: false,
   classifyRfidsError: null,
+
+  // Adjacent inventory results state
+  adjacentTempResults: null,
+  adjacentTempResultsLoading: false,
+  adjacentTempResultsError: null,
+  saveAdjacentTempResultsLoading: false,
+  deleteAdjacentTempResultsLoading: false,
 };
 
 export const getAssignedMembersInSession = createAsyncThunk(
@@ -361,6 +420,58 @@ export const classifyRfids = createAsyncThunk(
   }
 );
 
+// Adjacent inventory results API calls
+export const saveTempAdjacentInventoryResults = createAsyncThunk(
+  "inventory/saveTempAdjacentResults",
+  async (data: SaveTempAdjacentInventoryRequest, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.post('/api/v1/inventories/temp-adjacent-results', data);
+      return response.data;
+    } catch (error: any) {
+      return rejectWithValue(error.response?.data || error.message);
+    }
+  }
+);
+
+export const getTempAdjacentInventoryResults = createAsyncThunk(
+  "inventory/getTempAdjacentResults",
+  async (roomId: string, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get(`/api/v1/inventories/temp-adjacent-results/${roomId}`);
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        return null;
+      }
+      return rejectWithValue(error.response?.data || error.message);
+    }
+  }
+);
+
+export const deleteTempAdjacentInventoryResults = createAsyncThunk(
+  "inventory/deleteTempAdjacentResults",
+  async (roomId: string, { rejectWithValue }) => {
+    try {
+      await axiosInstance.delete(`/api/v1/inventories/temp-adjacent-results/${roomId}`);
+      return roomId;
+    } catch (error: any) {
+      return rejectWithValue(error.response?.data || error.message);
+    }
+  }
+);
+
+export const getAllTempAdjacentInventoryResults = createAsyncThunk(
+  "inventory/getAllTempAdjacentResults",
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get('/api/v1/inventories/temp-adjacent-results');
+      return response.data;
+    } catch (error: any) {
+      return rejectWithValue(error.response?.data || error.message);
+    }
+  }
+);
+
 const inventorySlice = createSlice({
   name: "inventory",
   initialState,
@@ -428,6 +539,17 @@ const inventorySlice = createSlice({
     },
     clearLastSubmittedResult: (state) => {
       state.lastSubmittedResult = null;
+    },
+
+    // Adjacent inventory results actions
+    setAdjacentTempResults: (state, action) => {
+      state.adjacentTempResults = action.payload;
+    },
+    clearAdjacentTempResults: (state) => {
+      state.adjacentTempResults = null;
+    },
+    clearAdjacentTempResultsError: (state) => {
+      state.adjacentTempResultsError = null;
     },
   },
   extraReducers: (builder) => {
@@ -627,6 +749,63 @@ const inventorySlice = createSlice({
         state.classifyRfidsLoading = false;
         state.classifyRfidsError = action.payload as string;
       })
+
+      // Adjacent inventory results actions
+      .addCase(saveTempAdjacentInventoryResults.pending, (state) => {
+        state.saveAdjacentTempResultsLoading = true;
+        state.adjacentTempResultsError = null;
+      })
+      .addCase(saveTempAdjacentInventoryResults.fulfilled, (state, action) => {
+        state.saveAdjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = null;
+        state.adjacentTempResults = action.payload;
+      })
+      .addCase(saveTempAdjacentInventoryResults.rejected, (state, action) => {
+        state.saveAdjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = action.payload as string || 'Lưu kết quả tạm thời tài sản hàng xóm thất bại';
+      })
+
+      .addCase(getTempAdjacentInventoryResults.pending, (state) => {
+        state.adjacentTempResultsLoading = true;
+        state.adjacentTempResultsError = null;
+      })
+      .addCase(getTempAdjacentInventoryResults.fulfilled, (state, action) => {
+        state.adjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = null;
+        state.adjacentTempResults = action.payload;
+      })
+      .addCase(getTempAdjacentInventoryResults.rejected, (state, action) => {
+        state.adjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = action.payload as string || 'Lấy kết quả tạm thời tài sản hàng xóm thất bại';
+      })
+
+      .addCase(deleteTempAdjacentInventoryResults.pending, (state) => {
+        state.deleteAdjacentTempResultsLoading = true;
+        state.adjacentTempResultsError = null;
+      })
+      .addCase(deleteTempAdjacentInventoryResults.fulfilled, (state, action) => {
+        state.deleteAdjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = null;
+        state.adjacentTempResults = null;
+      })
+      .addCase(deleteTempAdjacentInventoryResults.rejected, (state, action) => {
+        state.deleteAdjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = action.payload as string || 'Xóa kết quả tạm thời tài sản hàng xóm thất bại';
+      })
+
+      .addCase(getAllTempAdjacentInventoryResults.pending, (state) => {
+        state.adjacentTempResultsLoading = true;
+        state.adjacentTempResultsError = null;
+      })
+      .addCase(getAllTempAdjacentInventoryResults.fulfilled, (state, action) => {
+        state.adjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = null;
+        // Store all adjacent results if needed
+      })
+      .addCase(getAllTempAdjacentInventoryResults.rejected, (state, action) => {
+        state.adjacentTempResultsLoading = false;
+        state.adjacentTempResultsError = action.payload as string || 'Lấy tất cả kết quả tạm thời tài sản hàng xóm thất bại';
+      })
   },
 });
 
@@ -654,5 +833,10 @@ export const {
   clearClassifyRfidsResult,
   setClassifyRfidsLoading,
   clearClassifyRfidsError,
+  
+  // Adjacent inventory results actions
+  setAdjacentTempResults,
+  clearAdjacentTempResults,
+  clearAdjacentTempResultsError,
 } = inventorySlice.actions;
 export default inventorySlice.reducer
