@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
+import axiosInstance from '../../lib/api';
 interface Asset {
   id: number;
   name: string;
@@ -15,8 +16,8 @@ const patchAssetByRfids = createAsyncThunk<Asset[], string[]>(
   'assets/patchByRfids',
   async (rfids, thunkAPI) => {
     try {
-      const response = await axios.patch<Asset[]>(
-        'http://172.20.10.12:5000/api/v1/assets/rfid/batch',
+      const response = await axiosInstance.patch<Asset[]>(
+        '/api/v1/assets/rfid/batch',
         rfids,
         {
           headers: {

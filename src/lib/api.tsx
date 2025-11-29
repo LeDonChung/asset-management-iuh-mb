@@ -5,7 +5,7 @@ import { API_TIMEOUT, API_URL } from '@env'
 
 // Create axios instance
 export const axiosInstance = axios.create({
-  baseURL: 'http://34.158.42.23:3000',
+  baseURL: 'https://api.codeshare.id.vn',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -73,11 +73,11 @@ axiosInstance.interceptors.response.use(
         break
         
       case 404:
-        Alert.alert(
-          'Không tìm thấy',
-          'Không tìm thấy dữ liệu yêu cầu.',
-          [{ text: 'OK' }]
-        )
+        // Alert.alert(
+        //   'Không tìm thấy',
+        //   'Không tìm thấy dữ liệu yêu cầu.',
+        //   [{ text: 'OK' }]
+        // )
         break
         
       case 422:

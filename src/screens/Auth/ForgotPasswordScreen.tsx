@@ -104,7 +104,7 @@ export const ForgotPasswordScreen = () => {
               {/* Card Header */}
               <Card.Content style={styles.cardHeader}>
                 <Image
-                  source={{ uri: 'https://i.imgur.com/logo_iuh.png' }}
+                  source={require('../../../assets/bg/logo_iuh_main.png')}
                   style={styles.logo}
                   resizeMode="contain"
                 />

@@ -63,7 +63,7 @@ export const LoginScreen = () => {
               {/* Card Header */}
               <Card.Content style={styles.cardHeader}>
                 <Image
-                  source={{ uri: 'https://i.imgur.com/logo_iuh.png' }}
+                  source={require('../../../assets/bg/logo_iuh_main.png')}
                   style={styles.logo}
                   resizeMode="contain"
                 />
@@ -83,7 +83,7 @@ export const LoginScreen = () => {
                   style={styles.input}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  defaultValue="admin"
+                  defaultValue="nguoikiemke"
                   left={<TextInput.Icon icon="account" />}
                   outlineStyle={styles.inputOutline}
                   contentStyle={styles.inputContent}
