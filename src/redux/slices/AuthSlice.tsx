@@ -67,7 +67,9 @@ export const login = createAsyncThunk(
   'auth/login', 
   async (loginData: UserLoginPayload, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post('api/v1/auth/login', loginData)
+      console.log(axiosInstance.defaults.baseURL)
+      const response = await axiosInstance.post('/api/v1/auth/login', loginData)
+      console.log("hi")
       return response.data;
     } catch (error: any) {
       console.log(error)
