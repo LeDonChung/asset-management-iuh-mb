@@ -215,7 +215,17 @@ const deviceSlice = createSlice({
           state.deviceInfo.currentMode = mode ?? state.deviceInfo.currentMode;
           break;
         case COMMANDS.cmdCustomizedSessionTargetInventoryStart:
-          // Handle inventory tags - this will be processed by the component
+          // Handle inventory tags from JSON response
+          if (json.tags && Array.isArray(json.tags) && json.tags.length > 0) {
+            json.tags.forEach((tag: string) => {
+              if (state.scannedTagsMap[tag]) {
+                state.scannedTagsMap[tag] += 1;
+              } else {
+                state.scannedTagsMap[tag] = 1;
+              }
+            });
+            state.scannedTagsCount += json.tags.length;
+          }
           break;
         case COMMANDS.cmdCustomizedSessionTargetInventoryStop:
           // Handle inventory stop

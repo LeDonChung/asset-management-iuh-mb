@@ -722,4 +722,27 @@ export enum AssetType {
     status: InventoryResultStatus;
     note?: string;
   }
+
+  // Filter Types
+  export enum FilterOperator {
+    EQUALS = 'equals',
+    CONTAINS = 'contains',
+    STARTS_WITH = 'startsWith',
+    ENDS_WITH = 'endsWith',
+    GREATER_THAN = 'gt',
+    GREATER_THAN_OR_EQUAL = 'gte',
+    LESS_THAN = 'lt',
+    LESS_THAN_OR_EQUAL = 'lte',
+    IN = 'in',
+    NOT_IN = 'notIn',
+    BETWEEN = 'between'
+  }
+
+  export enum FieldType {
+    TEXT = 'text',
+    NUMBER = 'number',
+    DATE = 'date',
+    SELECT = 'select',
+    BOOLEAN = 'boolean'
+  }
   

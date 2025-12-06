@@ -15,6 +15,7 @@ import { InventoryScreen } from './App/InventoryScreen';
 import { ProfileScreen } from './App/ProfileScreen';
 import { RootStackParamList } from '../types/navigation';
 import { SettingScreen } from './App/SettingScreen';
+import { AssetIdentificationScreen } from './AssetIdentificationScreen';
 
 const MyTabBar = ({ state, descriptors, navigation }: any) => {
   const { colors } = useTheme();
@@ -27,6 +28,8 @@ const MyTabBar = ({ state, descriptors, navigation }: any) => {
         return focused ? 'person' : 'person-outline';
       case 'setting':
         return focused ? 'settings' : 'settings-outline';
+      case 'identify':
+        return focused ? 'qr-code' : 'qr-code-outline';
       default:
         return 'ellipse';
     }
@@ -131,9 +134,26 @@ export const MainApp = () => {
       initialRouteName="home"
       backBehavior="history"
     >
-      <Tab.Screen name="home" component={HomeStack} />
-      <Tab.Screen name="setting" component={SettingScreen} />
-      <Tab.Screen name="profile" component={ProfileScreen} />
+      <Tab.Screen 
+        name="home" 
+        component={HomeStack}
+        options={{ tabBarLabel: 'Trang chủ' }}
+      />
+      <Tab.Screen 
+        name="identify" 
+        component={AssetIdentificationScreen}
+        options={{ tabBarLabel: 'Định danh' }}
+      />
+      <Tab.Screen 
+        name="setting" 
+        component={SettingScreen}
+        options={{ tabBarLabel: 'Cài đặt' }}
+      />
+      <Tab.Screen 
+        name="profile" 
+        component={ProfileScreen}
+        options={{ tabBarLabel: 'Hồ sơ' }}
+      />
     </Tab.Navigator>
   );
 };

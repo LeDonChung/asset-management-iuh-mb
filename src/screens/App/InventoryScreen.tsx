@@ -214,6 +214,7 @@ export const InventoryScreen = () => {
   const [isInventoryRunning, setIsInventoryRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [hasDeletedTemp, setHasDeletedTemp] = useState(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   
   
   const [classifiedRfids, setClassifiedRfids] = useState<Set<string>>(new Set());
@@ -229,9 +230,6 @@ export const InventoryScreen = () => {
   
   const [tempAdjacentAssets, setTempAdjacentAssets] = useState<{[assetId: string]: any}>({});
   const [showTempAdjacentAssets, setShowTempAdjacentAssets] = useState(false);
-  
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSaveTimeRef = useRef<number>(Date.now());
 
   useEffect(() => {
     if (device && bluetoothState.isConnected) {
@@ -614,29 +612,16 @@ export const InventoryScreen = () => {
     
     return allOtherRooms.filter((asset: any) => !assetBookAssetIds.has(asset.id));
   }, [classifyRfidsResult, restoredClassificationResults, assetBookAssetIds]);
-  const handleAutoSaveTempResults = useCallback(async () => {
-    // Skip auto-save if user has deleted temp results
-    if (hasDeletedTemp) {
-      console.log('🚫 Skipping auto-save: User has deleted temp results');
-      return;
-    }
-
+  const handleSaveTempResults = useCallback(async () => {
     if (Object.keys(inventoryResults).length === 0) {
-      console.log('🚫 Skipping auto-save: No inventory results');
+      Alert.alert('Thông báo', 'Không có dữ liệu để lưu tạm');
       return;
     }
 
     if (!roomId || !unitId || !sessionId) {
-      console.log('🚫 Skipping auto-save: Missing required IDs');
+      Alert.alert('Lỗi', 'Thiếu thông tin phòng hoặc đơn vị');
       return;
     }
-
-    console.log('💾 Auto-saving temp results...', {
-      roomId,
-      resultCount: Object.keys(inventoryResults).length,
-      hasDeletedTemp,
-      inventoryResults: Object.keys(inventoryResults)
-    });
 
     const enhancedInventoryResults = { ...inventoryResults };
     const neighbors = getFilteredNeighbors;
@@ -671,46 +656,17 @@ export const InventoryScreen = () => {
       unitId,
       sessionId,
       inventoryResults: enhancedInventoryResults,
-      note: `Tự động lưu tạm kết quả kiểm kê phòng ${room?.roomCode || roomId}`,
+      note: `Lưu tạm kết quả kiểm kê phòng ${room?.roomCode || roomId}`,
       ttlSeconds: 86400,
     };
 
     try {
-      // Double-check before API call in case of race condition
-      if (hasDeletedTemp) {
-        console.log('🚫 Race condition detected: hasDeletedTemp is true, aborting save');
-        return;
-      }
-      
-      console.log('🚀 Calling saveTempInventoryResults API');
       await dispatch(saveTempInventoryResults(saveData)).unwrap();
-      lastSaveTimeRef.current = Date.now();
-      console.log('✅ Auto-save completed successfully');
+      Alert.alert('Thành công', 'Đã lưu tạm kết quả kiểm kê');
     } catch (error) {
-      console.log('❌ Auto-save failed:', error);
+      Alert.alert('Lỗi', 'Không thể lưu tạm kết quả kiểm kê');
     }
-  }, [inventoryResults, roomId, unitId, sessionId, room?.roomCode, dispatch, getFilteredNeighbors, getFilteredOtherRooms, hasDeletedTemp]);
-  useEffect(() => {
-    if (autoSaveTimerRef.current) {
-      clearInterval(autoSaveTimerRef.current);
-    }
-    autoSaveTimerRef.current = setInterval(() => {
-      handleAutoSaveTempResults();
-    }, 120000);
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearInterval(autoSaveTimerRef.current);
-        autoSaveTimerRef.current = null;
-      }
-    };
-  }, [handleAutoSaveTempResults]);
-  useFocusEffect(
-    useCallback(() => {
-      return () => {
-        handleAutoSaveTempResults();
-      };
-    }, [handleAutoSaveTempResults])
-  );
+  }, [inventoryResults, roomId, unitId, sessionId, room?.roomCode, dispatch, getFilteredNeighbors, getFilteredOtherRooms]);
 
   const handleScanDevices = async () => {
     dispatch(scanDevices());
@@ -788,20 +744,6 @@ export const InventoryScreen = () => {
       setIsStopping(false);
     }
   };
-  const handleSaveTempResults = async () => {
-    if (Object.keys(inventoryResults).length === 0) {
-      Alert.alert('Thông báo', 'Không có dữ liệu kiểm kê để lưu');
-      return;
-    }
-
-    if (!roomId || !unitId || !sessionId) {
-      Alert.alert('Lỗi', 'Thiếu thông tin cần thiết để lưu tạm');
-      return;
-    }
-
-    await handleAutoSaveTempResults();
-    Alert.alert('Thành công', 'Đã lưu tạm kết quả kiểm kê');
-  };
 
   const handleDeleteTempResults = async () => {
     if (!roomId) {
@@ -828,23 +770,12 @@ export const InventoryScreen = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              console.log('🗑️ Deleting temp results for room:', roomId);
+              setAutoSaveEnabled(false);
               await dispatch(deleteTempInventoryResults(roomId)).unwrap();
-              console.log('✅ Temp results deleted successfully');
-              
-              // Clear auto-save timer to prevent further saves
-              if (autoSaveTimerRef.current) {
-                clearInterval(autoSaveTimerRef.current);
-                autoSaveTimerRef.current = null;
-                console.log('⏹️ Cleared auto-save timer');
-              }
-              
               setInventoryResults({});
               setHasDeletedTemp(true);
-              console.log('🚫 Set hasDeletedTemp = true');
               Alert.alert('Thành công', 'Đã xóa kết quả tạm thời');
             } catch (error) {
-              console.log('❌ Failed to delete temp results:', error);
               Alert.alert('Lỗi', 'Không thể xóa kết quả tạm thời');
             }
           }
@@ -920,7 +851,8 @@ export const InventoryScreen = () => {
       status = SafeAssetActionStatus.MISSING;
     }
 
-    // Reset hasDeletedTemp when user makes new changes
+    // ✅ Re-enable auto-save when user makes changes
+    setAutoSaveEnabled(true);
     setHasDeletedTemp(false);
 
     setInventoryResults(prev => ({
@@ -2109,6 +2041,14 @@ export const InventoryScreen = () => {
       <View style={styles.section}>
         <View style={styles.actionButtonsContainer}>
           <TouchableOpacity
+            onPress={handleSaveTempResults}
+            style={[styles.actionButtonLarge, styles.saveTempButton]}
+          >
+            <Ionicons name="save-outline" size={20} color="white" />
+            <Text style={styles.actionButtonLargeText}>Lưu tạm</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             onPress={handleDeleteTempResults}
             style={[styles.actionButtonLarge, styles.deleteTempButton]}
           >
@@ -2341,7 +2281,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   saveTempButton: {
-    backgroundColor: '#6B7280',
+    backgroundColor: '#3B82F6', // Blue color for save temp
   },
   deleteTempButton: {
     backgroundColor: '#F59E0B',
