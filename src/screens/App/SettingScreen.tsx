@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   Dimensions,
   StatusBar,
+  TextInput,
 } from 'react-native';
 import { Text, View } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -26,8 +27,9 @@ import {
 } from '../../redux/slices/BluetoothSlice';
 import { deviceCommandManager } from '../../utils/DeviceCommands';
 import { patchAssetByRfids, setTags } from '../../redux/slices/AssetSlice';
-import { fetchDeviceInformation, processResponse, setDeviceMode, setDevicePower, startInventory, stopInventory, addScannedTag, batchAddScannedTags, resetScannedTagsMap, setInventoryRunning } from '../../redux/slices/DeviceSlice';
+import { fetchDeviceInformation, processResponse, setDeviceMode, setDevicePower, startInventory, stopInventory, addScannedTag, batchAddScannedTags, resetScannedTagsMap, setInventoryRunning, startAlert, stopAlert, sendCommand } from '../../redux/slices/DeviceSlice';
 import { setDevice } from '../../redux/slices/DeviceSlice';
+import { COMMANDS } from '../../utils/Command';
 
 const { width } = Dimensions.get('window');
 
@@ -45,6 +47,16 @@ export const SettingScreen = () => {
   const scannedTagsMap = useSelector((state: RootState) => state.device.scannedTagsMap);
   const [isFetching, setIsFetching] = useState(false);
   
+  // Alert mode configuration states
+  const [alertSettings, setAlertSettings] = useState({
+    wifiName: 'Ruby tu C13 den C25',
+    wifiPassword: 'VietnhatC136868',
+    host: '192.168.1.10',
+    port: '3001',
+  });
+  const [isAlertMode, setIsAlertMode] = useState(false);
+  const [isSettingAlert, setIsSettingAlert] = useState(false);
+  
   // Memoized stats để tránh re-render không cần thiết
   const memoizedStats = useMemo(() => ({
     totalCount: scannedTagsCount,
@@ -60,6 +72,7 @@ export const SettingScreen = () => {
     deviceInfo: false,
     config: false,
     inventory: true,
+    alert: false,
   });
 
   // Smart queue system để tối ưu performance
@@ -234,9 +247,134 @@ export const SettingScreen = () => {
       [sectionName]: !prev[sectionName]
     }));
   };
+
+  // Alert mode handlers
+  const handlerStartAlert = async () => {
+    if (!device) {
+      dispatch(addLog({
+        message: 'Please connect to a device first.',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+      return;
+    }
+    
+    try {
+      setIsAlertMode(true);
+      await dispatch(sendCommand({
+        device, 
+        command: COMMANDS.cmdSendAlertStart
+      }) as any);
+      
+      dispatch(addLog({
+        message: '🚨 Chế độ cảnh báo đã khởi động thành công',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+    } catch (error: any) {
+      setIsAlertMode(false);
+      dispatch(addLog({
+        message: `❌ Không thể khởi động chế độ cảnh báo: ${error?.message || 'Lỗi không xác định'}`,
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+    }
+  };
+
+  const handlerStopAlert = async () => {
+    if (!device) {
+      dispatch(addLog({
+        message: 'Please connect to a device first.',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+      return;
+    }
+    
+    try {
+      setIsAlertMode(false);
+      await dispatch(sendCommand({
+        device, 
+        command: COMMANDS.cmdSendAlertStop
+      }) as any);
+      
+      dispatch(addLog({
+        message: '🛑 Chế độ cảnh báo đã dừng thành công',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+    } catch (error: any) {
+      dispatch(addLog({
+        message: `❌ Không thể dừng chế độ cảnh báo: ${error?.message || 'Lỗi không xác định'}`,
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+    }
+  };
+
+  const handlerSaveAlertSettings = async () => {
+    if (!device) {
+      dispatch(addLog({
+        message: 'Please connect to a device first.',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+      return;
+    }
+    setIsSettingAlert(true);
+    const { wifiName, wifiPassword, host, port } = alertSettings;
+    const settings = {
+      wifiName,
+      wifiPassword,
+      host,
+      port,
+    };
+
+    try {
+      await dispatch(sendCommand({
+        device, 
+        command: COMMANDS.cmdSendSettingAlert, 
+        value: settings
+      }) as any);
+      
+      dispatch(addLog({
+        message: 'Cài đặt cảnh báo đã được lưu thành công',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+    } catch (error: any) {
+      dispatch(addLog({
+        message: `Không thể lưu cài đặt cảnh báo: ${error?.message || 'Lỗi không xác định'}`,
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+    } finally {
+      setIsSettingAlert(false);
+    }
+  };
   return (
     <View style={{ flex: 1, backgroundColor: '#f8fafc' }}>
       <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
+      
+      {/* Alert Mode Status Banner */}
+      {isAlertMode && (
+        <View style={{
+          backgroundColor: '#dc2626',
+          paddingVertical: 8,
+          paddingHorizontal: 16,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+          <Ionicons name="warning" size={16} color="white" style={{ marginRight: 8 }} />
+          <Text style={{
+            color: 'white',
+            fontWeight: '600',
+            fontSize: 14,
+          }}>
+            🚨 CHẾ ĐỘ CẢNH BÁO ĐANG HOẠT ĐỘNG
+          </Text>
+          <View style={{
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: 'white',
+            marginLeft: 8,
+            opacity: 0.8,
+          }} />
+        </View>
+      )}
       <ScrollView 
         style={{ flex: 1 }} 
         showsVerticalScrollIndicator={false}
@@ -988,6 +1126,294 @@ export const SettingScreen = () => {
               </Picker>
             </View>
           </View>
+            </>
+          )}
+        </View>
+
+        {/* Alert Configuration Section */}
+        <View style={{
+          marginHorizontal: 20,
+          marginBottom: 20,
+          backgroundColor: '#fff',
+          borderRadius: 16,
+          padding: 20,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.1,
+          shadowRadius: 8,
+          elevation: 4,
+        }}>
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              marginBottom: 20,
+            }}
+            onPress={() => toggleSection('alert')}
+            activeOpacity={0.7}
+          >
+            <View style={{
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              backgroundColor: '#dc2626',
+              justifyContent: 'center',
+              alignItems: 'center',
+              marginRight: 12,
+            }}>
+              <Ionicons name="warning" size={20} color="white" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{
+                fontSize: 18,
+                fontWeight: '600',
+                color: '#1f2937',
+                marginBottom: 2,
+              }}>
+                Chế Độ Cảnh Báo
+              </Text>
+              <Text style={{
+                fontSize: 14,
+                color: '#6b7280',
+              }}>
+                {isAlertMode 
+                  ? `Cảnh báo đang hoạt động • ${alertSettings.host}:${alertSettings.port}` 
+                  : 'Cấu hình WiFi và cài đặt cảnh báo'
+                }
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              
+              <Ionicons 
+                name={sections.alert ? 'chevron-up' : 'chevron-down'} 
+                size={24} 
+                color="#64748b" 
+              />
+            </View>
+          </TouchableOpacity>
+
+          {sections.alert && (
+            <>
+              {/* WiFi Configuration */}
+              <View style={{
+                backgroundColor: '#f9fafb',
+                borderRadius: 12,
+                padding: 16,
+                marginBottom: 16,
+              }}>
+                <Text style={{
+                  fontSize: 16,
+                  fontWeight: '600',
+                  color: '#374151',
+                  marginBottom: 12,
+                }}>
+                  Cấu Hình WiFi
+                </Text>
+
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ 
+                    fontSize: 14,
+                    color: '#6b7280',
+                    marginBottom: 6,
+                  }}>
+                    Tên WiFi
+                  </Text>
+                  <TextInput
+                    style={{
+                      borderWidth: 1,
+                      borderColor: '#d1d5db',
+                      borderRadius: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      backgroundColor: '#fff',
+                      fontSize: 14,
+                    }}
+                    placeholder="Nhập tên WiFi"
+                    value={alertSettings.wifiName}
+                    onChangeText={text =>
+                      setAlertSettings({ ...alertSettings, wifiName: text })
+                    }
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ 
+                    fontSize: 14,
+                    color: '#6b7280',
+                    marginBottom: 6,
+                  }}>
+                    Mật Khẩu WiFi
+                  </Text>
+                  <TextInput
+                    style={{
+                      borderWidth: 1,
+                      borderColor: '#d1d5db',
+                      borderRadius: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      backgroundColor: '#fff',
+                      fontSize: 14,
+                    }}
+                    placeholder="Nhập mật khẩu WiFi"
+                    value={alertSettings.wifiPassword}
+                    onChangeText={text =>
+                      setAlertSettings({ ...alertSettings, wifiPassword: text })
+                    }
+                    placeholderTextColor="#9ca3af"
+                    secureTextEntry
+                  />
+                </View>
+
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ 
+                    fontSize: 14,
+                    color: '#6b7280',
+                    marginBottom: 6,
+                  }}>
+                    Địa Chỉ Host
+                  </Text>
+                  <TextInput
+                    style={{
+                      borderWidth: 1,
+                      borderColor: '#d1d5db',
+                      borderRadius: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      backgroundColor: '#fff',
+                      fontSize: 14,
+                    }}
+                    placeholder="Nhập địa chỉ host"
+                    value={alertSettings.host}
+                    onChangeText={text =>
+                      setAlertSettings({ ...alertSettings, host: text })
+                    }
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ 
+                    fontSize: 14,
+                    color: '#6b7280',
+                    marginBottom: 6,
+                  }}>
+                    Port
+                  </Text>
+                  <TextInput
+                    style={{
+                      borderWidth: 1,
+                      borderColor: '#d1d5db',
+                      borderRadius: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      backgroundColor: '#fff',
+                      fontSize: 14,
+                    }}
+                    placeholder="Nhập cổng"
+                    value={alertSettings.port}
+                    onChangeText={text =>
+                      setAlertSettings({ ...alertSettings, port: text })
+                    }
+                    placeholderTextColor="#9ca3af"
+                    keyboardType="numeric"
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#10b981',
+                    paddingVertical: 12,
+                    paddingHorizontal: 16,
+                    borderRadius: 8,
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}
+                  onPress={handlerSaveAlertSettings}
+                  disabled={isSettingAlert}
+                >
+                  {isSettingAlert ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="save" size={16} color="white" style={{ marginRight: 8 }} />
+                      <Text style={{ color: '#fff', fontWeight: '600' }}>
+                        Lưu Cài Đặt
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Alert Control */}
+              <View style={{
+                backgroundColor: '#fef2f2',
+                borderRadius: 12,
+                padding: 16,
+                borderWidth: 1,
+                borderColor: '#fecaca',
+              }}>
+                <Text style={{
+                  fontSize: 16,
+                  fontWeight: '600',
+                  color: '#dc2626',
+                  marginBottom: 8,
+                }}>
+                  Alert Control
+                </Text>
+                
+                <Text style={{
+                  fontSize: 14,
+                  color: '#7f1d1d',
+                  marginBottom: 16,
+                  lineHeight: 20,
+                }}>
+                  {isAlertMode 
+                    ? 'Alert mode is currently active. The device will scan and alert for unauthorized RFID tags.'
+                    : 'Start alert mode to enable continuous scanning and alerting for unauthorized RFID tags.'
+                  }
+                </Text>
+
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: isAlertMode ? '#dc2626' : '#16a34a',
+                    paddingVertical: 12,
+                    paddingHorizontal: 16,
+                    borderRadius: 8,
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}
+                  onPress={isAlertMode ? handlerStopAlert : handlerStartAlert}
+                  disabled={!bluetoothState.isConnected}
+                >
+                  <Ionicons 
+                    name={isAlertMode ? "stop" : "play"} 
+                    size={16} 
+                    color="white" 
+                    style={{ marginRight: 8 }} 
+                  />
+                  <Text style={{ 
+                    color: '#fff', 
+                    fontWeight: '600',
+                    fontSize: 16,
+                  }}>
+                    {isAlertMode ? 'Stop Alert' : 'Start Alert'}
+                  </Text>
+                </TouchableOpacity>
+
+                {!bluetoothState.isConnected && (
+                  <Text style={{
+                    fontSize: 12,
+                    color: '#9ca3af',
+                    textAlign: 'center',
+                    marginTop: 8,
+                  }}>
+                    Connect to a device to enable alert mode
+                  </Text>
+                )}
+              </View>
             </>
           )}
         </View>

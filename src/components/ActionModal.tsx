@@ -51,12 +51,10 @@ export const ActionModal: React.FC<ActionModalProps> = ({
   const [localImages, setLocalImages] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
 
-  // Don't render if not visible
   if (!visible) {
     return null;
   }
 
-  // Show loading if asset or actionType is not ready
   if (!asset || !actionType) {
     return (
       <Modal visible={visible} animationType="slide" onRequestClose={onClose} transparent={true}>
@@ -80,14 +78,12 @@ export const ActionModal: React.FC<ActionModalProps> = ({
     );
   }
 
-  // Check if permissions are already granted
   const checkPermissions = async () => {
     try {
       const permissions = Platform.select({
         ios: [PERMISSIONS.IOS.CAMERA, PERMISSIONS.IOS.PHOTO_LIBRARY],
         android: [
           PERMISSIONS.ANDROID.CAMERA,
-          // Use appropriate storage permission based on Android version
           Platform.Version >= 33 
             ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES 
             : PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE
@@ -121,7 +117,6 @@ export const ActionModal: React.FC<ActionModalProps> = ({
         ios: [PERMISSIONS.IOS.CAMERA, PERMISSIONS.IOS.PHOTO_LIBRARY],
         android: [
           PERMISSIONS.ANDROID.CAMERA,
-          // Use appropriate storage permission based on Android version
           Platform.Version >= 33 
             ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES 
             : PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE

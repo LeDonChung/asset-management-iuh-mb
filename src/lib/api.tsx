@@ -1,15 +1,15 @@
 import axios from 'axios'
-import { Alert, Platform } from 'react-native'
-import { env, getApiUrl } from './env'
+import { Alert } from 'react-native'
 import { tokenStorage, clearAuthData } from './storage'
+import { API_TIMEOUT, API_URL } from '@env'
 
 // Create axios instance
 export const axiosInstance = axios.create({
-  baseURL: 'http://192.168.1.19:3000',
+  baseURL: 'https://api.codeshare.id.vn',
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: env.API_TIMEOUT,
+  timeout: 10000,
 })
 
 // Request interceptor to add auth token
@@ -73,11 +73,11 @@ axiosInstance.interceptors.response.use(
         break
         
       case 404:
-        Alert.alert(
-          'Không tìm thấy',
-          'Không tìm thấy dữ liệu yêu cầu.',
-          [{ text: 'OK' }]
-        )
+        // Alert.alert(
+        //   'Không tìm thấy',
+        //   'Không tìm thấy dữ liệu yêu cầu.',
+        //   [{ text: 'OK' }]
+        // )
         break
         
       case 422:

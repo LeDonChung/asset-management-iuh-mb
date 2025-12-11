@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,17 +12,13 @@ import {
   FlatList,
 } from 'react-native';
 import { useSelector } from 'react-redux';
-import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
+import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { RootState } from '../../redux/store';
 import { useAppDispatch } from '../../redux/hooks';
-import IconFeather from 'react-native-vector-icons/Feather';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import AntDesign from 'react-native-vector-icons/AntDesign';
 import { 
-  setSelectedDevice,
   setRfidConnected,
   setScanning,
-  updateDeviceStatus,
   saveTempInventoryResults,
   getTempInventoryResults,
   deleteTempInventoryResults,
@@ -30,52 +26,163 @@ import {
   classifyRfids,
   clearClassifyRfidsResult,
   setClassifyRfidsLoading,
-  getRoomInventoryResults,
+  saveTempAdjacentInventoryResults,
+  getTempAdjacentInventoryResults,
+  deleteTempAdjacentInventoryResults,
   AssetActionStatus,
   ScanMethod,
   SaveTempInventoryRequest,
+  SaveTempAdjacentInventoryRequest,
+  AdjacentAssetInventoryDetail,
+  RoomAdjacentResult,
+  TempAdjacentInventoryResponse,
 } from '../../redux/slices/InventorySlice';
 import { 
   scanDevices, 
   connectToDevice, 
   disconnectDevice,
-  addLog,
-  clearLogs
+  addLog
 } from '../../redux/slices/BluetoothSlice';
 import { 
-  fetchDeviceInformation, 
   processResponse, 
-  setDeviceMode, 
-  setDevicePower, 
   startInventory, 
   stopInventory, 
-  addScannedTag, 
-  batchAddScannedTags, 
   resetScannedTagsMap, 
-  setInventoryRunning,
   setDevice
 } from '../../redux/slices/DeviceSlice';
 import { deviceCommandManager } from '../../utils/DeviceCommands';
-import { patchAssetByRfids, setTags } from '../../redux/slices/AssetSlice';
+
 import { getAssetBookInventoryFromUnitIdAndRoomId } from '../../redux/slices/AssetBookSlice';
 import { RootStackParamList } from '../../types/navigation';
 import { AssetType } from '../../types';
-import { ActionModal, ActionModalData } from '../../components/ActionModal';
 
-const { width, height } = Dimensions.get('window');
-
-// Define asset action status constants as fallback
 const ASSET_ACTION_STATUS = {
   MATCHED: 'MATCHED',
   MISSING: 'MISSING',
   EXCESS: 'EXCESS',
-  BROKEN: 'BROKEN',
-  NEEDS_REPAIR: 'NEEDS_REPAIR',
-  LIQUIDATION_PROPOSED: 'LIQUIDATION_PROPOSED'
+  BROKEN: 'BROKEN'
 } as const;
 
-// Create a safe reference to AssetActionStatus
 const SafeAssetActionStatus = AssetActionStatus || ASSET_ACTION_STATUS;
+const AssetItem = ({ 
+  asset, 
+  result, 
+  onQuantityChange,
+  assetType
+}: {
+  asset: any;
+  result: any;
+  onQuantityChange: (assetId: string, quantity: number) => void;
+  assetType: AssetType;
+}) => {
+  const countedQuantity = result?.quantity || 0;
+  const systemQuantity = asset.quantity;
+  const status = result?.status || SafeAssetActionStatus.MISSING;
+  
+  const getStatusInfo = (status: string) => {
+    switch (status) {
+      case SafeAssetActionStatus.MATCHED:
+        return { text: 'Khớp', color: '#10B981', bgColor: '#10B98120' };
+      case SafeAssetActionStatus.MISSING:
+        return { text: 'Thiếu', color: '#EF4444', bgColor: '#EF444420' };
+      case SafeAssetActionStatus.EXCESS:
+        return { text: 'Thừa', color: '#F59E0B', bgColor: '#F59E0B20' };
+      default:
+        return { text: 'Chưa kiểm', color: '#6B7280', bgColor: '#6B728020' };
+    }
+  };
+
+  const statusInfo = getStatusInfo(status);
+
+  const isUnscanned = countedQuantity === 0;
+  const showUnscannedStyle = isUnscanned && assetType === AssetType.FIXED_ASSET;
+
+  return (
+    <View style={[
+      styles.tempAdjacentAssetCardSimple,
+      showUnscannedStyle && styles.unscannedAssetCard,
+      assetType === AssetType.TOOLS_EQUIPMENT && styles.toolsEquipmentCard
+    ]}>
+      <View style={styles.tempAdjacentHeader}>
+        <View style={styles.tempAdjacentInfo}>
+          {showUnscannedStyle && (
+            <View style={styles.unscannedIndicator}>
+              <Ionicons name="alert-circle-outline" size={12} color="#F59E0B" />
+              <Text style={styles.unscannedText}>Chưa quét</Text>
+            </View>
+          )}
+          <Text style={styles.tempAdjacentAssetId}>{asset.asset?.ktCode || 'Mã tài sản'}</Text>
+          <Text style={styles.tempAdjacentAssetName} numberOfLines={1}>
+            {asset.asset?.name || 'Tên tài sản'}
+          </Text>
+          {asset.asset?.locationInRoom && (
+            <Text style={styles.tempAdjacentLocationText}>
+              Vị trí: {asset.asset.locationInRoom}
+            </Text>
+          )}
+        </View>
+        <View style={[styles.statusBadgeSimple, { backgroundColor: statusInfo.bgColor }]}>
+          <Text style={[styles.statusBadgeTextSimple, { color: statusInfo.color }]}>
+            {statusInfo.text}
+          </Text>
+        </View>
+      </View>
+
+      {/* Hiển thị khác nhau cho tài sản cố định và công cụ dụng cụ */}
+      {assetType === AssetType.FIXED_ASSET ? (
+        // Tài sản cố định: chỉ hiển thị nút xác nhận nếu chưa quét
+        status === SafeAssetActionStatus.MISSING ? (
+          <View style={styles.fixedAssetConfirmSection}>
+            <TouchableOpacity 
+              style={styles.confirmButton}
+              onPress={() => onQuantityChange(asset.assetId, 1)}
+            >
+              <Ionicons name="checkmark-circle-outline" size={20} color="#10B981" />
+              <Text style={styles.confirmButtonText}>Xác nhận có mặt</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null
+      ) : (
+        // Công cụ dụng cụ: hiển thị như cũ
+        <View style={styles.tempAdjacentQuantitySection}>
+          <View style={styles.tempAdjacentQuantityItem}>
+            <Text style={styles.tempAdjacentQuantityLabel}>Sổ tài sản</Text>
+            <View style={styles.tempAdjacentQuantityValue}>
+              <Text style={styles.tempAdjacentQuantityText}>{systemQuantity}</Text>
+            </View>
+          </View>
+          
+          <View style={styles.tempAdjacentQuantityItem}>
+            <Text style={styles.tempAdjacentQuantityLabel}>Kiểm kê</Text>
+            <View style={styles.tempAdjacentQuantityInputContainer}>
+              <TouchableOpacity 
+                style={styles.tempAdjacentQuantityButton}
+                onPress={() => onQuantityChange(asset.assetId, Math.max(0, countedQuantity - 1))}
+              >
+                <Ionicons name="remove" size={20} color="#6B7280" />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.tempAdjacentQuantityInput}
+                value={countedQuantity.toString()}
+                onChangeText={(text) => onQuantityChange(asset.assetId, parseInt(text) || 0)}
+                keyboardType="numeric"
+                placeholder="0"
+                textAlign="center"
+              />
+              <TouchableOpacity 
+                style={styles.tempAdjacentQuantityButton}
+                onPress={() => onQuantityChange(asset.assetId, countedQuantity + 1)}
+              >
+                <Ionicons name="add" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+    </View>
+  );
+};
 
 type InventoryScreenRouteProp = RouteProp<RootStackParamList, 'InventoryScreen'>;
 
@@ -84,65 +191,46 @@ export const InventoryScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<InventoryScreenRouteProp>();
   
-  // Get params from navigation
   const { roomId, unitId, assignmentId, sessionId, room, unit, session } = route.params;
-  
-  // Redux state
   const {
-    selectedDevice,
-    availableDevices,
-    rfidConnected,
-    scanning,
-    tempResults,
-    tempResultsLoading,
     saveTempResultsLoading,
     submitResultLoading,
-    lastSubmittedResult,
     classifyRfidsResult,
     classifyRfidsLoading,
-    roomInventoryResults,
-    roomInventoryResultsLoading,
+    saveAdjacentTempResultsLoading,
+    adjacentTempResults,
+    adjacentTempResultsLoading,
+    deleteAdjacentTempResultsLoading,
   } = useSelector((state: RootState) => state.inventory);
 
-  // Bluetooth and Device state
   const bluetoothState = useSelector((state: RootState) => state.bluetooth);
   const device = useSelector((state: RootState) => state.device.device);
-  const deviceInfo = useSelector((state: RootState) => state.device.deviceInfo);
-  const scannedTagsCount = useSelector((state: RootState) => state.device.scannedTagsCount);
-  const scannedTagsMap = useSelector((state: RootState) => state.device.scannedTagsMap);
-  const tags = useSelector((state: RootState) => state.assets.tags);
 
-  // Asset book state
   const { assetBookInventory, loading: assetBookLoading, error: assetBookError } = useSelector((state: RootState) => state.assetBook);
-
-  // Local state
   const [showDeviceList, setShowDeviceList] = useState(false);
   const [inventoryResults, setInventoryResults] = useState<{[assetId: string]: any}>({});
   const [selectedAssetType, setSelectedAssetType] = useState<AssetType>(AssetType.FIXED_ASSET);
   const [showRoomInfo, setShowRoomInfo] = useState(true);
-  const [isFetching, setIsFetching] = useState(false);
   const [isInventoryRunning, setIsInventoryRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [hasDeletedTemp, setHasDeletedTemp] = useState(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   
-  // Action modal state
-  const [showActionModal, setShowActionModal] = useState(false);
-  const [selectedAsset, setSelectedAsset] = useState<any>(null);
-  const [actionType, setActionType] = useState<'LIQUIDATION' | 'REPAIR' | 'VIEW_RESULT' | null>(null);
   
-  // RFID classification state
   const [classifiedRfids, setClassifiedRfids] = useState<Set<string>>(new Set());
   
-  // Tab state for classification results
   const [activeClassificationTab, setActiveClassificationTab] = useState<'neighbors' | 'otherRooms'>('neighbors');
+  const [restoredClassificationResults, setRestoredClassificationResults] = useState<{
+    neighbors: any[];
+    otherRooms: any[];
+  } | null>(null);
   
-  // State for managing removed assets
   const [removedOtherAssets, setRemovedOtherAssets] = useState<Set<string>>(new Set());
   const [checkedOtherAssets, setCheckedOtherAssets] = useState<Set<string>>(new Set());
   
-  // State for tracking if room has submitted results
-  const [hasSubmittedResults, setHasSubmittedResults] = useState(false);
-  const [submittedResults, setSubmittedResults] = useState<{[assetId: string]: any}>({});
+  const [tempAdjacentAssets, setTempAdjacentAssets] = useState<{[assetId: string]: any}>({});
+  const [showTempAdjacentAssets, setShowTempAdjacentAssets] = useState(false);
 
-  // Setup device monitoring when device is connected
   useEffect(() => {
     if (device && bluetoothState.isConnected) {
       deviceCommandManager.setupMonitoring(
@@ -150,11 +238,11 @@ export const InventoryScreen = () => {
         (response) => {
           dispatch(processResponse(response));
           
-          // Handle inventory tags
           if (response.cmd === 'cmd_customized_session_target_inventory_start' && response.tags) {
             handleRfidTagsDetected(response.tags);
           } else if (response.cmd === 'cmd_customized_session_target_inventory_stop') {
             setIsInventoryRunning(false);
+            setIsStopping(false);
             dispatch(setScanning(false));
           }
         },
@@ -167,34 +255,36 @@ export const InventoryScreen = () => {
       );
     }
   }, [device, bluetoothState.isConnected, dispatch]);
-
-  // Handle RFID tags detected from device
   const handleRfidTagsDetected = async (rfidTags: string[]) => {
     const unknownRfids: string[] = [];
     
     rfidTags.forEach(rfidId => {
-      // Find asset with matching RFID tag
       const matchedAsset = findAssetByRfidId(rfidId);
       
       if (matchedAsset) {
-        // Update inventory result for matched asset
         updateInventoryResultForRfidMatch(matchedAsset);
       } else {
-        // Check if RFID has already been classified
-        if (!classifiedRfids.has(rfidId)) {
-          unknownRfids.push(rfidId);
+        const tempAdjacentAsset = Object.entries(tempAdjacentAssets).find(([_, asset]) => 
+          asset.rfidTag === rfidId || asset.assetId === rfidId || asset.ktCode === rfidId
+        );
+        
+        if (tempAdjacentAsset) {
+          const [assetId, asset] = tempAdjacentAsset;
+          const currentRecheckQuantity = asset.recheckQuantity || 0;
+          handleTempAdjacentRecheck(assetId, currentRecheckQuantity + 1);
+        } else {
+          if (!classifiedRfids.has(rfidId)) {
+            unknownRfids.push(rfidId);
+          }
         }
       }
     });
-    
-    // If there are unknown RFID tags that haven't been classified, classify them
     if (unknownRfids.length > 0) {
       await handleClassifyRfids(unknownRfids);
     }
   };
 
   const findAssetByRfidId = (rfidId: string) => {
-    // Search through all asset types in current asset book
     if (!assetBookInventory?.assetTypes) return null;
     
     for (const assetType of assetBookInventory.assetTypes) {
@@ -206,10 +296,33 @@ export const InventoryScreen = () => {
     }
     return null;
   };
+  const updateTempAdjacentAssetFromInventory = (asset: any) => {
+    const assetId = asset.assetId;
+    
+    setTempAdjacentAssets(prev => {
+      if (prev[assetId]) {
+        return {
+          ...prev,
+          [assetId]: {
+            ...prev[assetId],
+            quantity: 1,
+            recheckQuantity: 1,
+            status: SafeAssetActionStatus.MATCHED,
+            updatedAt: new Date().toISOString(),
+            scanMethod: ScanMethod.RFID,
+          }
+        };
+      }
+      return prev;
+    });
+  };
 
   const updateInventoryResultForRfidMatch = (asset: any) => {
     const assetId = asset.assetId;
     const systemQuantity = asset.quantity;
+    
+    // Reset hasDeletedTemp when RFID scan creates new data
+    setHasDeletedTemp(false);
     
     setInventoryResults(prev => {
       const currentResult = prev[assetId];
@@ -227,19 +340,12 @@ export const InventoryScreen = () => {
           systemQuantity,
           status: SafeAssetActionStatus.MATCHED,
           updatedAt: new Date().toISOString(),
-          scanMethod: ScanMethod.RFID, // Mark as scanned by RFID
+          scanMethod: ScanMethod.RFID,
         },
       };
     });
+    updateTempAdjacentAssetFromInventory(asset);
   };
-
-  const showScanFeedback = (type: 'success' | 'warning' | 'error', message: string) => {
-    if (type === 'warning' || type === 'error') {
-      Alert.alert('RFID Scan', message);
-    }
-  };
-
-  // Function to classify RFID tags
   const handleClassifyRfids = async (rfids: string[]) => {
     if (rfids.length === 0) return;
 
@@ -251,13 +357,9 @@ export const InventoryScreen = () => {
         currentUnitId: unitId
       })).unwrap();
 
-
-      // Initialize inventory results with default quantity 1 for neighbors and other rooms
       const newInventoryResults: {[key: string]: any} = {};
-      
-      // Set default quantity 1 for neighbors
       result.neighbors.forEach((asset: any) => {
-        const key = asset.id; // Use pure asset ID without prefix
+        const key = asset.id;
         if (!inventoryResults[key]) {
           newInventoryResults[key] = {
             quantity: 1,
@@ -269,10 +371,8 @@ export const InventoryScreen = () => {
           };
         }
       });
-      
-      // Set default quantity 1 for other rooms
       result.otherRooms.forEach((asset: any) => {
-        const key = asset.id; // Use pure asset ID without prefix
+        const key = asset.id;
         if (!inventoryResults[key]) {
           newInventoryResults[key] = {
             quantity: 1,
@@ -280,27 +380,22 @@ export const InventoryScreen = () => {
             status: SafeAssetActionStatus.MATCHED,
             updatedAt: new Date().toISOString(),
             scanMethod: ScanMethod.RFID,
-            assetType: 'other', // Add type to distinguish
+            assetType: 'other',
           };
         }
       });
-      
-      // Update inventory results if there are new assets
       if (Object.keys(newInventoryResults).length > 0) {
         setInventoryResults(prev => ({
           ...prev,
           ...newInventoryResults
         }));
       }
-      
-      // Mark these RFIDs as classified
       setClassifiedRfids(prev => {
         const newSet = new Set(prev);
         rfids.forEach(rfid => newSet.add(rfid));
         return newSet;
       });
     } catch (error) {
-      console.error('Failed to classify RFID tags:', error);
       Alert.alert('Lỗi', 'Không thể phân loại RFID tags');
     } finally {
       dispatch(setClassifyRfidsLoading(false));
@@ -314,52 +409,16 @@ export const InventoryScreen = () => {
       }
 
       try {
-        // Check if room has submitted results first
-        try {
-          const submittedResults = await dispatch(getRoomInventoryResults({
-            roomId,
-            assignmentId,
-          })).unwrap();
-          
-          if (submittedResults && submittedResults.length > 0) {
-            // Room has submitted results - show them in read-only mode
-            setHasSubmittedResults(true);
-            const submittedResultsMap: { [key: string]: any } = {};
-            submittedResults.forEach((result: any) => {
-              submittedResultsMap[result.assetId] = {
-                quantity: result.countedQuantity,
-                systemQuantity: result.systemQuantity,
-                status: result.status,
-                note: result.note || '',
-                imageUrls: result.imageUrls || [],
-                updatedAt: result.createdAt,
-                scanMethod: result.scanMethod,
-                isSubmitted: true,
-              };
-            });
-            setSubmittedResults(submittedResultsMap);
-            return; // Don't load temp results if already submitted
-          }
-        } catch (error) {
-          // No submitted results found, continue with temp results
-          console.log('No submitted results found, loading temp results');
-        }
-        console.log('hi  ', unitId, roomId);
-        // Load asset book data
         const assetBookResult = await dispatch(getAssetBookInventoryFromUnitIdAndRoomId({
           unitId,
           roomId,
         })).unwrap();
-        
-        
-        
-        // Initialize inventory results when asset book data is loaded
         if (assetBookResult?.assetTypes) {
           const initialResults: { [key: string]: any } = {};
           assetBookResult.assetTypes.forEach((assetType: any) => {
             assetType.items.forEach((item: any) => {
               initialResults[item.assetId] = {
-                quantity: 0,  
+                quantity: 0,
                 systemQuantity: item.quantity,
                 status: SafeAssetActionStatus.MISSING,
                 note: '',
@@ -370,16 +429,90 @@ export const InventoryScreen = () => {
           });
           setInventoryResults(initialResults);
         }
-        
-        // Load temp results if available
+        if (roomId) {
+          try {
+            const tempAdjacentResults = await dispatch(getTempAdjacentInventoryResults(roomId)).unwrap();
+            if (tempAdjacentResults?.result && tempAdjacentResults.result.length > 0) {
+              const adjacentAssets: {[assetId: string]: any} = {};
+              tempAdjacentResults.result.forEach((asset: any) => {
+                adjacentAssets[asset.assetId] = {
+                  ...asset,
+                  roomCode: asset.roomCode || asset.roomId || roomId,
+                  originalRoomId: asset.roomId || roomId,
+                  isTempAdjacent: true,
+                  createdAt: tempAdjacentResults.createdAt,
+                  expiresAt: tempAdjacentResults.expiresAt,
+                  // Preserve metadata from backend
+                  ktCode: asset.ktCode,
+                  name: asset.name,
+                  rfidTag: asset.rfidTag,
+                };
+              });
+              
+              if (Object.keys(adjacentAssets).length > 0) {
+                setTempAdjacentAssets(adjacentAssets);
+                setShowTempAdjacentAssets(true);
+              }
+            }
+          } catch (error) {
+          }
+        }
         if (roomId) {
           try {
             const tempResults = await dispatch(getTempInventoryResults(roomId)).unwrap();
             if (tempResults?.inventoryResults) {
               setInventoryResults(tempResults.inventoryResults);
+              
+              const neighborAssets: any[] = [];
+              const otherRoomAssets: any[] = [];
+              
+              Object.entries(tempResults.inventoryResults).forEach(([assetId, result]: [string, any]) => {
+                if (result.assetType === 'neighbor') {
+                  const existsInAssetBook = assetBookAssetIds.has(assetId);
+                  if (!existsInAssetBook) {
+                    neighborAssets.push({
+                      id: assetId,
+                      ktCode: result.ktCode || assetId,
+                      name: result.name || 'Tài sản hàng xóm',
+                      currentRoom: {
+                        id: result.roomId || roomId,
+                        roomCode: result.roomCode || 'N/A'
+                      }
+                    });
+                  }
+                } else if (result.assetType === 'other') {
+                  const existsInAssetBook = assetBookAssetIds.has(assetId);
+                  if (!existsInAssetBook) {
+                    otherRoomAssets.push({
+                      id: assetId,
+                      ktCode: result.ktCode || assetId,
+                      name: result.name || 'Tài sản phòng khác',
+                      currentRoom: {
+                        id: result.roomId || roomId,
+                        roomCode: result.roomCode || 'N/A'
+                      }
+                    });
+                    if (result.quantity > 0) {
+                      setCheckedOtherAssets(prev => new Set([...prev, assetId]));
+                    }
+                  }
+                }
+              });
+              if (neighborAssets.length > 0 || otherRoomAssets.length > 0) {
+                const tempRfidTags = new Set<string>();
+                Object.entries(tempResults.inventoryResults).forEach(([assetId, result]: [string, any]) => {
+                  if (result.assetType === 'neighbor' || result.assetType === 'other') {
+                    tempRfidTags.add(result.rfidTag || assetId);
+                  }
+                });
+                setClassifiedRfids(tempRfidTags);
+                setRestoredClassificationResults({
+                  neighbors: neighborAssets,
+                  otherRooms: otherRoomAssets
+                });
+              }
             }
           } catch (error) {
-            // Silent fail for temp results
           }
         }
       } catch (error: any) {
@@ -390,15 +523,13 @@ export const InventoryScreen = () => {
 
     loadAllData();
   }, [dispatch, unitId, roomId, assignmentId]);
-
-  // Handle asset book error
   useEffect(() => {
     if (assetBookError) {
       Alert.alert('Lỗi', assetBookError);
     }
   }, [assetBookError]);
 
-  // Get assets by type from asset book
+
   const getAssetsByType = (type: AssetType) => {
     if (!assetBookInventory?.assetTypes) return [];
     
@@ -408,13 +539,42 @@ export const InventoryScreen = () => {
     return assetTypeData?.items || [];
   };
 
-  // Get current assets based on selected type
-  const currentAssets = getAssetsByType(selectedAssetType);
+  const currentAssets = useMemo(() => {
+    const assets = getAssetsByType(selectedAssetType);
+    
+    // Create a shallow copy to avoid mutating the original array
+    const assetsCopy = [...assets];
+    
+    // Sort assets: unscanned first, then by location
+    return assetsCopy.sort((a, b) => {
+      const aResult = inventoryResults[a.assetId];
+      const bResult = inventoryResults[b.assetId];
+      
+      const aScanned = aResult?.quantity > 0;
+      const bScanned = bResult?.quantity > 0;
+      
+      // Priority 1: Unscanned items first
+      if (aScanned !== bScanned) {
+        return aScanned ? 1 : -1; // Unscanned (false) comes first
+      }
+      
+      // Priority 2: Sort by location in room
+      const aLocation = (a.asset as any)?.locationInRoom || '';
+      const bLocation = (b.asset as any)?.locationInRoom || '';
+      
+      if (aLocation !== bLocation) {
+        return aLocation.localeCompare(bLocation);
+      }
+      
+      // Priority 3: Sort by asset code as fallback
+      const aCode = a.asset?.ktCode || '';
+      const bCode = b.asset?.ktCode || '';
+      return aCode.localeCompare(bCode);
+    });
+  }, [selectedAssetType, assetBookInventory, inventoryResults]);
   
-  // Use submitted results if available, otherwise use temp results
-  const displayResults = hasSubmittedResults ? submittedResults : inventoryResults;
+  const displayResults = inventoryResults;
 
-  // Get asset IDs that are already in the asset book to avoid duplicates
   const getAssetBookAssetIds = () => {
     if (!assetBookInventory?.assetTypes) return new Set();
     const assetIds = new Set<string>();
@@ -426,20 +586,88 @@ export const InventoryScreen = () => {
     return assetIds;
   };
 
-  const assetBookAssetIds = getAssetBookAssetIds();
+  const assetBookAssetIds = useMemo(() => getAssetBookAssetIds(), [assetBookInventory]);
+  const getFilteredNeighbors = useMemo(() => {
+    const reduxNeighbors = classifyRfidsResult?.neighbors || [];
+    const restoredNeighbors = restoredClassificationResults?.neighbors || [];
+    const allNeighbors = [...reduxNeighbors];
+    restoredNeighbors.forEach(restored => {
+      if (!allNeighbors.find(existing => existing.id === restored.id)) {
+        allNeighbors.push(restored);
+      }
+    });
+    
+    return allNeighbors.filter((asset: any) => !assetBookAssetIds.has(asset.id));
+  }, [classifyRfidsResult, restoredClassificationResults, assetBookAssetIds]);
 
-  // Filter out assets that are already in asset book from classification results
-  const getFilteredNeighbors = () => {
-    if (!classifyRfidsResult?.neighbors) return [];
-    return classifyRfidsResult.neighbors.filter((asset: any) => !assetBookAssetIds.has(asset.id));
-  };
+  const getFilteredOtherRooms = useMemo(() => {
+    const reduxOtherRooms = classifyRfidsResult?.otherRooms || [];
+    const restoredOtherRooms = restoredClassificationResults?.otherRooms || [];
+    const allOtherRooms = [...reduxOtherRooms];
+    restoredOtherRooms.forEach(restored => {
+      if (!allOtherRooms.find(existing => existing.id === restored.id)) {
+        allOtherRooms.push(restored);
+      }
+    });
+    
+    return allOtherRooms.filter((asset: any) => !assetBookAssetIds.has(asset.id));
+  }, [classifyRfidsResult, restoredClassificationResults, assetBookAssetIds]);
+  const handleSaveTempResults = useCallback(async () => {
+    if (Object.keys(inventoryResults).length === 0) {
+      Alert.alert('Thông báo', 'Không có dữ liệu để lưu tạm');
+      return;
+    }
 
-  const getFilteredOtherRooms = () => {
-    if (!classifyRfidsResult?.otherRooms) return [];
-    return classifyRfidsResult.otherRooms.filter((asset: any) => !assetBookAssetIds.has(asset.id));
-  };
+    if (!roomId || !unitId || !sessionId) {
+      Alert.alert('Lỗi', 'Thiếu thông tin phòng hoặc đơn vị');
+      return;
+    }
 
-  // Device control handlers
+    const enhancedInventoryResults = { ...inventoryResults };
+    const neighbors = getFilteredNeighbors;
+    neighbors.forEach(asset => {
+      if (enhancedInventoryResults[asset.id]) {
+        enhancedInventoryResults[asset.id] = {
+          ...enhancedInventoryResults[asset.id],
+          ktCode: asset.ktCode,
+          name: asset.name,
+          roomId: asset.currentRoom?.id,
+          roomCode: asset.currentRoom?.roomCode,
+          assetType: 'neighbor'
+        };
+      }
+    });
+    const otherRooms = getFilteredOtherRooms;
+    otherRooms.forEach(asset => {
+      if (enhancedInventoryResults[asset.id]) {
+        enhancedInventoryResults[asset.id] = {
+          ...enhancedInventoryResults[asset.id],
+          ktCode: asset.ktCode,
+          name: asset.name,
+          roomId: asset.currentRoom?.id,
+          roomCode: asset.currentRoom?.roomCode,
+          assetType: 'other'
+        };
+      }
+    });
+
+    const saveData: SaveTempInventoryRequest = {
+      roomId,
+      unitId,
+      sessionId,
+      inventoryResults: enhancedInventoryResults,
+      note: `Lưu tạm kết quả kiểm kê phòng ${room?.roomCode || roomId}`,
+      ttlSeconds: 86400,
+    };
+
+    try {
+      await dispatch(saveTempInventoryResults(saveData)).unwrap();
+      Alert.alert('Thành công', 'Đã lưu tạm kết quả kiểm kê');
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể lưu tạm kết quả kiểm kê');
+    }
+  }, [inventoryResults, roomId, unitId, sessionId, room?.roomCode, dispatch, getFilteredNeighbors, getFilteredOtherRooms]);
+
   const handleScanDevices = async () => {
     dispatch(scanDevices());
   };
@@ -483,7 +711,6 @@ export const InventoryScreen = () => {
     
     try {
       dispatch(resetScannedTagsMap());
-      // Clear previous classification results when starting new scan
       dispatch(clearClassifyRfidsResult());
       setClassifiedRfids(new Set());
       await dispatch(startInventory(device));
@@ -492,48 +719,29 @@ export const InventoryScreen = () => {
     } catch (error) {
       Alert.alert('Lỗi', 'Không thể bắt đầu quét RFID');
     }
-  }; 
+  };
 
   const handleStopScan = async () => {
-    if (!device) {
+    if (!device || isStopping) {
       return;
     }
     
+    setIsStopping(true);
+    
+    // Update UI immediately for better responsiveness
+    setIsInventoryRunning(false);
+    dispatch(setScanning(false));
+    
     try {
+      // Stop inventory in background
       await dispatch(stopInventory(device));
-      setIsInventoryRunning(false);
-      dispatch(setScanning(false));
     } catch (error) {
+      // If stop fails, revert the UI state
+      setIsInventoryRunning(true);
+      dispatch(setScanning(true));
       Alert.alert('Lỗi', 'Không thể dừng quét RFID');
-    }
-  };
-
-  // Inventory management handlers
-  const handleSaveTempResults = async () => {
-    if (Object.keys(inventoryResults).length === 0) {
-      Alert.alert('Thông báo', 'Không có dữ liệu kiểm kê để lưu');
-      return;
-    }
-
-    if (!roomId || !unitId || !sessionId) {
-      Alert.alert('Lỗi', 'Thiếu thông tin cần thiết để lưu tạm');
-      return;
-    }
-
-    const saveData: SaveTempInventoryRequest = {
-      roomId,
-      unitId,
-      sessionId,
-      inventoryResults,
-      note: `Lưu tạm kết quả kiểm kê phòng ${room?.roomCode || roomId}`,
-      ttlSeconds: 86400, // 24 hours
-    };
-
-    try {
-      await dispatch(saveTempInventoryResults(saveData)).unwrap();
-      Alert.alert('Thành công', 'Đã lưu tạm kết quả kiểm kê');
-    } catch (error) {
-      Alert.alert('Lỗi', 'Không thể lưu tạm kết quả kiểm kê');
+    } finally {
+      setIsStopping(false);
     }
   };
 
@@ -543,13 +751,37 @@ export const InventoryScreen = () => {
       return;
     }
 
-    try {
-      await dispatch(deleteTempInventoryResults(roomId)).unwrap();
-      setInventoryResults({});
-      Alert.alert('Thành công', 'Đã xóa kết quả tạm thời');
-    } catch (error) {
-      Alert.alert('Lỗi', 'Không thể xóa kết quả tạm thời');
+    const totalResults = Object.keys(inventoryResults).length;
+    if (totalResults === 0) {
+      Alert.alert('Thông báo', 'Không có dữ liệu tạm để xóa');
+      return;
     }
+
+    Alert.alert(
+      'Xác nhận xóa',
+      `Bạn có chắc muốn xóa ${totalResults} kết quả kiểm kê tạm thời không?\n\nHành động này không thể hoàn tác.`,
+      [
+        {
+          text: 'Hủy',
+          style: 'cancel'
+        },
+        {
+          text: 'Xóa',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setAutoSaveEnabled(false);
+              await dispatch(deleteTempInventoryResults(roomId)).unwrap();
+              setInventoryResults({});
+              setHasDeletedTemp(true);
+              Alert.alert('Thành công', 'Đã xóa kết quả tạm thời');
+            } catch (error) {
+              Alert.alert('Lỗi', 'Không thể xóa kết quả tạm thời');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handleSubmitResults = async () => {
@@ -605,7 +837,7 @@ export const InventoryScreen = () => {
     }
   };
 
-  const handleQuantityChange = (assetId: string, quantity: number) => {
+  const handleQuantityChange = useCallback((assetId: string, quantity: number) => {
     // Find the asset to get system quantity
     const asset = currentAssets.find(a => a.assetId === assetId);
     const systemQuantity = asset?.quantity || 0;
@@ -619,6 +851,10 @@ export const InventoryScreen = () => {
       status = SafeAssetActionStatus.MISSING;
     }
 
+    // ✅ Re-enable auto-save when user makes changes
+    setAutoSaveEnabled(true);
+    setHasDeletedTemp(false);
+
     setInventoryResults(prev => ({
       ...prev,
       [assetId]: {
@@ -629,10 +865,10 @@ export const InventoryScreen = () => {
         updatedAt: new Date().toISOString(),
       },
     }));
-  };
+  }, [currentAssets]);
 
   // Handler for neighbor assets quantity change
-  const handleNeighborQuantityChange = (assetId: string, quantity: number) => {
+  const handleNeighborQuantityChange = useCallback((assetId: string, quantity: number) => {
     const systemQuantity = 1; // Neighbor assets are typically 1 each
     
     let status = SafeAssetActionStatus.MATCHED;
@@ -656,10 +892,10 @@ export const InventoryScreen = () => {
         assetType: 'neighbor',
       },
     }));
-  };
+  }, []);
 
   // Handler for other room assets quantity change
-  const handleOtherRoomQuantityChange = (assetId: string, quantity: number) => {
+  const handleOtherRoomQuantityChange = useCallback((assetId: string, quantity: number) => {
     const systemQuantity = 1; // Other room assets are typically 1 each
     
     let status = SafeAssetActionStatus.MATCHED;
@@ -683,7 +919,7 @@ export const InventoryScreen = () => {
         assetType: 'other',
       },
     }));
-  };
+  }, []);
 
   // Handler for removing other room asset from list
   const handleRemoveOtherAsset = (assetId: string) => {
@@ -713,28 +949,237 @@ export const InventoryScreen = () => {
     }));
   };
 
+  // Handler for temp adjacent assets quantity change
+  const handleTempAdjacentQuantityChange = useCallback((assetId: string, quantity: number) => {
+    setTempAdjacentAssets(prev => {
+      const asset = prev[assetId];
+      if (!asset) return prev;
+      
+      const systemQuantity = asset.systemQuantity || 1;
+      
+      let status = SafeAssetActionStatus.MATCHED;
+      if (quantity === 0) {
+        status = SafeAssetActionStatus.MISSING;
+      } else if (quantity > systemQuantity) {
+        status = SafeAssetActionStatus.EXCESS;
+      } else if (quantity < systemQuantity) {
+        status = SafeAssetActionStatus.MISSING;
+      }
+
+      return {
+        ...prev,
+        [assetId]: {
+          ...asset,
+          countedQuantity: quantity,
+          status,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    });
+  }, []);
+
+  // Handler for temp adjacent assets recheck quantity
+  const handleTempAdjacentRecheck = useCallback((assetId: string, quantity: number) => {
+    setTempAdjacentAssets(prev => {
+      const asset = prev[assetId];
+      if (!asset) return prev;
+      
+      const systemQuantity = asset.systemQuantity || 1;
+      
+      let status = SafeAssetActionStatus.MATCHED;
+      if (quantity === 0) {
+        status = SafeAssetActionStatus.MISSING;
+      } else if (quantity > systemQuantity) {
+        status = SafeAssetActionStatus.EXCESS;
+      } else if (quantity < systemQuantity) {
+        status = SafeAssetActionStatus.MISSING;
+      }
+
+      return {
+        ...prev,
+        [assetId]: {
+          ...asset,
+          recheckQuantity: quantity,
+          status,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    });
+  }, []);
+
   // Handler for saving neighbors temp results
-  const handleSaveNeighborsTemp = () => {
-    const neighborAssets = classifyRfidsResult?.neighbors || [];
-    const neighborResults: { [key: string]: any } = {};
+  const handleSaveNeighborsTemp = async () => {
+    // Get both filtered neighbors and temp adjacent assets
+    const neighborAssets = getFilteredNeighbors;
+    const tempAdjacentEntries = Object.entries(tempAdjacentAssets);
     
+    if (neighborAssets.length === 0 && tempAdjacentEntries.length === 0) {
+      Alert.alert('Thông báo', 'Không có tài sản hàng xóm để lưu');
+      return;
+    }
+
+    // Group assets by room
+    const assetsByRoom: { [roomId: string]: AdjacentAssetInventoryDetail[] } = {};
+    
+    // Process regular neighbor assets from classification
     neighborAssets.forEach((asset: any) => {
-      const key = `neighbor-${asset.id}`;
-      if (inventoryResults[key]) {
-        neighborResults[key] = inventoryResults[key];
+      const assetRoomId = asset.currentRoom?.id || asset.roomId;
+      if (!assetRoomId) return;
+      
+      const result = inventoryResults[asset.id];
+      // Only include assets that have been inventoried (quantity > 0)
+      if (result && result.quantity > 0) {
+        if (!assetsByRoom[assetRoomId]) {
+          assetsByRoom[assetRoomId] = [];
+        }
+        
+        assetsByRoom[assetRoomId].push({
+          assetId: asset.id,
+          roomId: assetRoomId,
+          systemQuantity: result.systemQuantity || 1,
+          countedQuantity: result.quantity,
+          scanMethod: result.scanMethod || ScanMethod.RFID,
+          status: result.status || SafeAssetActionStatus.MATCHED,
+          note: result.note || '',
+          imageUrls: result.imageUrls || [],
+          assetType: 'neighbor',
+          // Additional metadata for restoration
+          ktCode: asset.ktCode || asset.id,
+          name: asset.name || 'Tài sản hàng xóm',
+          roomCode: asset.currentRoom?.roomCode,
+          rfidTag: result.rfidTag || asset.id,
+        });
+      }
+    });
+    
+    // Process temp adjacent assets that have been rechecked
+    tempAdjacentEntries.forEach(([assetId, asset]) => {
+      const assetRoomId = asset.originalRoomId || asset.roomId || roomId;
+      const recheckQuantity = asset.recheckQuantity;
+      const originalQuantity = asset.countedQuantity || 0;
+      
+      // Include if there's a recheck quantity or original quantity > 0
+      if (recheckQuantity > 0 || originalQuantity > 0) {
+        if (!assetsByRoom[assetRoomId]) {
+          assetsByRoom[assetRoomId] = [];
+        }
+        
+        assetsByRoom[assetRoomId].push({
+          assetId: assetId,
+          roomId: assetRoomId,
+          systemQuantity: asset.systemQuantity || 1,
+          countedQuantity: recheckQuantity !== undefined ? recheckQuantity : originalQuantity,
+          scanMethod: asset.scanMethod || ScanMethod.RFID,
+          status: asset.status || SafeAssetActionStatus.MATCHED,
+          note: asset.note || '',
+          imageUrls: asset.imageUrls || [],
+          assetType: 'neighbor',
+          // Additional metadata for restoration
+          ktCode: asset.ktCode || assetId,
+          name: asset.name || 'Tài sản hàng xóm',
+          roomCode: asset.roomCode,
+          rfidTag: asset.rfidTag,
+        });
       }
     });
 
-    console.log('Saving neighbors temp results:', {
-      count: Object.keys(neighborResults).length,
-      results: neighborResults
-    });
-    
-    Alert.alert('Thành công', `Đã lưu tạm ${Object.keys(neighborResults).length} tài sản hàng xóm`);
+    // Convert to API format: [{roomId: , result: []}]
+    const roomResults: RoomAdjacentResult[] = Object.entries(assetsByRoom).map(([roomId, result]) => ({
+      roomId,
+      result,
+    }));
+
+    if (roomResults.length === 0) {
+      const totalNeighborAssets = neighborAssets.length;
+      const inventoriedCount = neighborAssets.filter(asset => {
+        const result = inventoryResults[asset.id];
+        return result && result.quantity > 0;
+      }).length;
+      
+      Alert.alert(
+        'Thông báo', 
+        `Không có tài sản hàng xóm nào được kiểm để lưu.\n\nTổng số tài sản hàng xóm: ${totalNeighborAssets}\nĐã kiểm kê: ${inventoriedCount}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              if (totalNeighborAssets > 0) {
+                setActiveClassificationTab('neighbors');
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+
+    const totalAssets = roomResults.reduce((sum, room) => sum + room.result.length, 0);
+    const totalRooms = roomResults.length;
+
+    // Show confirmation dialog
+    Alert.alert(
+      'Xác nhận lưu tạm',
+      `Bạn có muốn lưu tạm ${totalAssets} tài sản hàng xóm từ ${totalRooms} phòng không?\n\nDữ liệu sẽ được lưu trong 24 giờ.`,
+      [
+        {
+          text: 'Hủy',
+          style: 'cancel'
+        },
+        {
+          text: 'Lưu tạm',
+          onPress: async () => {
+            const saveData: SaveTempAdjacentInventoryRequest = {
+              roomResults,
+              note: `Lưu tạm ${totalAssets} tài sản hàng xóm từ ${totalRooms} phòng (được kiểm từ phòng ${room?.roomCode || roomId})`,
+              ttlSeconds: 86400, // 24 hours
+            };
+
+            await performSaveNeighborsTemp(saveData, totalAssets, totalRooms, roomResults);
+          }
+        }
+      ]
+    );
   };
 
-  // Calculate statistics
-  const getStatistics = () => {
+  // Separate function to perform the actual save operation
+  const performSaveNeighborsTemp = async (
+    saveData: SaveTempAdjacentInventoryRequest, 
+    totalAssets: number, 
+    totalRooms: number, 
+    roomResults: RoomAdjacentResult[]
+  ) => {
+
+    try {
+      const response = await dispatch(saveTempAdjacentInventoryResults(saveData)).unwrap();
+      
+      Alert.alert(
+        'Thành công', 
+        `Đã lưu tạm ${totalAssets} tài sản hàng xóm từ ${totalRooms} phòng khác nhau`,
+        [
+          {
+            text: 'OK'
+          }
+        ]
+      );
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Không thể lưu tạm kết quả tài sản hàng xóm';
+      Alert.alert(
+        'Lỗi', 
+        errorMessage,
+        [
+          {
+            text: 'Thử lại',
+            onPress: () => handleSaveNeighborsTemp()
+          },
+          {
+            text: 'Đóng',
+            style: 'cancel'
+          }
+        ]
+      );
+    }
+  };
+  const stats = useMemo(() => {
     const total = currentAssets.length;
     let matched = 0;
     let missing = 0;
@@ -750,7 +1195,6 @@ export const InventoryScreen = () => {
       if (countedQuantity > 0) {
         counted++;
         
-        // Count scan methods
         if (result?.scanMethod === ScanMethod.RFID) {
           rfidScanned++;
         } else if (result?.scanMethod === ScanMethod.MANUAL) {
@@ -770,82 +1214,14 @@ export const InventoryScreen = () => {
     });
 
     return { total, counted, matched, missing, excess, rfidScanned, manualScanned };
-  };
-
-  const stats = getStatistics();
+  }, [currentAssets, displayResults]);
 
 
-  const getSelectedDeviceInfo = () => {
-    return availableDevices.find(device => device.id === selectedDevice);
-  };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'online': return '#10B981';
-      case 'busy': return '#F59E0B';
-      case 'offline': return '#EF4444';
-      default: return '#6B7280';
-    }
-  };
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'online': return 'Sẵn sàng';
-      case 'busy': return 'Đang sử dụng';
-      case 'offline': return 'Ngoại tuyến';
-      default: return 'Không xác định';
-    }
-  };
 
-  // Action modal handlers
-  const handleLiquidationAction = (asset: any) => {
-    setSelectedAsset(asset);
-    setActionType('LIQUIDATION');
-    setShowActionModal(true);
-  };
 
-  const handleRepairAction = (asset: any) => {
-    setSelectedAsset(asset);
-    setActionType('REPAIR');
-    setShowActionModal(true);
-  };
 
-  const handleViewResult = (asset: any) => {
-    setSelectedAsset(asset);
-    setActionType('VIEW_RESULT');
-    setShowActionModal(true);
-  };
-
-  const handleActionConfirm = async (data: ActionModalData) => {
-    if (!selectedAsset) return;
-
-    try {
-      // Update inventory result with action data
-      setInventoryResults(prev => ({
-        ...prev,
-        [selectedAsset.assetId]: {
-          ...prev[selectedAsset.assetId],
-          status: data.status,
-          note: data.reason || prev[selectedAsset.assetId]?.note || '',
-          imageUrls: [...(prev[selectedAsset.assetId]?.imageUrls || []), ...data.images],
-          updatedAt: new Date().toISOString(),
-        },
-      }));
-
-      setShowActionModal(false);
-      setSelectedAsset(null);
-      setActionType(null);
-    } catch (error) {
-      console.error('Error updating asset action:', error);
-      Alert.alert('Lỗi', 'Không thể cập nhật hành động cho tài sản');
-    }
-  };
-
-  const handleCloseActionModal = () => {
-    setShowActionModal(false);
-    setSelectedAsset(null);
-    setActionType(null);
-  };
 
   if (assetBookLoading) {
     return (
@@ -862,7 +1238,6 @@ export const InventoryScreen = () => {
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <TouchableOpacity 
@@ -893,7 +1268,6 @@ export const InventoryScreen = () => {
         </View>
       </View>
 
-      {/* Room Information & Statistics - Collapsible */}
       {showRoomInfo && (
         <View style={styles.roomInfoSection}>
           <View style={styles.roomInfoHeader}>
@@ -903,7 +1277,6 @@ export const InventoryScreen = () => {
             <Text style={styles.roomInfoTitle}>Thông tin phòng & Thống kê</Text>
           </View>
 
-          {/* Room Details */}
           <View style={styles.roomDetailsGrid}>
             <View style={styles.roomDetailItem}>
               <Text style={styles.roomDetailLabel}>Mã phòng</Text>
@@ -931,7 +1304,6 @@ export const InventoryScreen = () => {
             </View>
           </View>
 
-          {/* Statistics */}
           <View style={styles.statisticsGrid}>
             <View style={[styles.statCard, styles.statCardGreen]}>
               <Text style={[styles.statNumberCompact, { color: '#10B981' }]}>{stats.matched}</Text>
@@ -941,22 +1313,6 @@ export const InventoryScreen = () => {
               <Text style={[styles.statNumberCompact, { color: '#F59E0B' }]}>{stats.missing}</Text>
               <Text style={styles.statLabelCompact}>Thiếu</Text>
             </View>
-            <View style={[styles.statCard, styles.statCardYellow]}>
-              <Text style={[styles.statNumberCompact, { color: '#F59E0B' }]}>{stats.excess}</Text>
-              <Text style={styles.statLabelCompact}>Thừa</Text>
-            </View>
-            <View style={[styles.statCard, styles.statCardPurple]}>
-              <Text style={[styles.statNumberCompact, { color: '#8B5CF6' }]}>0</Text>
-              <Text style={styles.statLabelCompact}>Đề xuất thanh lý</Text>
-            </View>
-            <View style={[styles.statCard, styles.statCardYellow]}>
-              <Text style={[styles.statNumberCompact, { color: '#F59E0B' }]}>0</Text>
-              <Text style={styles.statLabelCompact}>Cần sửa chữa</Text>
-            </View>
-            <View style={[styles.statCard, styles.statCardBlue]}>
-              <Text style={[styles.statNumberCompact, { color: '#3B82F6' }]}>{stats.counted}</Text>
-              <Text style={styles.statLabelCompact}>Đã kiểm</Text>
-            </View>
             <View style={[styles.statCard, styles.statCardGray, styles.statCardWide]}>
               <Text style={[styles.statNumberCompact, { color: '#6B7280' }]}>{stats.total}</Text>
               <Text style={styles.statLabelCompact}>Tổng</Text>
@@ -965,7 +1321,6 @@ export const InventoryScreen = () => {
         </View>
       )}
 
-      {/* Asset Type Selector */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Loại tài sản</Text>
@@ -1009,8 +1364,8 @@ export const InventoryScreen = () => {
         </View>
       </View>
 
-      {/* Device Control Section - Only show for TOOLS_EQUIPMENT and not submitted */}
-      {!hasSubmittedResults && selectedAssetType === AssetType.FIXED_ASSET && (
+      {/* Device Control Section - Only show for FIXED_ASSET */}
+      {selectedAssetType === AssetType.FIXED_ASSET && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionTitleContainer}>
@@ -1131,13 +1486,20 @@ export const InventoryScreen = () => {
                 <Text style={styles.controlButtonText}>Ngắt kết nối</Text>
               </TouchableOpacity>
               
-              {isInventoryRunning ? (
+              {isInventoryRunning || isStopping ? (
                 <TouchableOpacity
                   onPress={handleStopScan}
-                  style={[styles.controlButton, styles.stopButton]}
+                  disabled={isStopping}
+                  style={[
+                    styles.controlButton, 
+                    styles.stopButton,
+                    isStopping && { opacity: 0.6 }
+                  ]}
                 >
                   <ActivityIndicator size="small" color="white" />
-                  <Text style={styles.controlButtonText}>Dừng quét</Text>
+                  <Text style={styles.controlButtonText}>
+                    {isStopping ? 'Đang dừng...' : 'Dừng quét'}
+                  </Text>
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
@@ -1157,7 +1519,15 @@ export const InventoryScreen = () => {
       {/* Asset List Section */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Danh sách tài sản ({currentAssets.length})</Text>
+          <Text style={styles.sectionTitle}>
+            Danh sách tài sản ({currentAssets.length})
+          </Text>
+          <View style={styles.unscannedCounter}>
+            <Ionicons name="alert-circle-outline" size={16} color="#F59E0B" />
+            <Text style={styles.unscannedCounterText}>
+              {stats.total - stats.counted} chưa quét
+            </Text>
+          </View>
         </View>
 
         {currentAssets.length === 0 ? (
@@ -1173,129 +1543,193 @@ export const InventoryScreen = () => {
             style={styles.flatListContainer}
             nestedScrollEnabled={true}
             contentContainerStyle={styles.flatListContent}
-            renderItem={({ item: asset, index }) => {
-              const result = displayResults[asset.assetId];
-              const countedQuantity = result?.quantity || 0;
-              const systemQuantity = asset.quantity;
-              const status = result?.status || SafeAssetActionStatus.MISSING;
-              
-              const getStatusInfo = (status: string) => {
-                switch (status) {
-                  case SafeAssetActionStatus.MATCHED:
-                    return { text: 'Khớp', color: '#10B981', bgColor: '#10B98120' };
-                  case SafeAssetActionStatus.MISSING:
-                    return { text: 'Thiếu', color: '#EF4444', bgColor: '#EF444420' };
-                  case SafeAssetActionStatus.EXCESS:
-                    return { text: 'Thừa', color: '#F59E0B', bgColor: '#F59E0B20' };
-                  default:
-                    return { text: 'Chưa kiểm', color: '#6B7280', bgColor: '#6B728020' };
-                }
-              };
-
-              const statusInfo = getStatusInfo(status);
-
-              return (
-                <View style={styles.assetCardRedesigned}>
-                  <View style={styles.assetHeaderRedesigned}>
-                    <View style={styles.assetInfoRedesigned}>
-                      <Text style={styles.assetCodeRedesigned}>{asset.asset?.ktCode || 'Mã tài sản'}</Text>
-                      <Text style={styles.assetNameRedesigned} numberOfLines={1}>
-                        {asset.asset?.name || 'Tên tài sản'}
-                      </Text>
-                    </View>
-                    <View style={[styles.statusBadgeRedesigned, { backgroundColor: statusInfo.bgColor }]}>
-                      <Text style={[styles.statusBadgeTextRedesigned, { color: statusInfo.color }]}>
-                        {statusInfo.text}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.quantitySectionRedesigned}>
-                    <View style={styles.quantityItemRedesigned}>
-                      <Text style={styles.quantityLabelRedesigned}>Sổ tài sản</Text>
-                      <View style={styles.quantityValueRedesigned}>
-                        <Text style={styles.quantityTextRedesigned}>{systemQuantity}</Text>
-                      </View>
-                    </View>
-                    
-                    <View style={styles.quantityItemRedesigned}>
-                      <Text style={styles.quantityLabelRedesigned}>Kiểm kê</Text>
-                      <View style={styles.quantityInputContainerRedesigned}>
-                        <TouchableOpacity 
-                          style={[styles.quantityButtonRedesigned, hasSubmittedResults && styles.disabledButton]}
-                          onPress={() => !hasSubmittedResults && handleQuantityChange(asset.assetId, Math.max(0, countedQuantity - 1))}
-                          disabled={hasSubmittedResults}
-                        >
-                          <Ionicons name="remove" size={18} color={hasSubmittedResults ? "#9CA3AF" : "#6B7280"} />
-                        </TouchableOpacity>
-                        <TextInput
-                          style={[styles.quantityInputRedesigned, hasSubmittedResults && styles.disabledInput]}
-                          value={countedQuantity.toString()}
-                          onChangeText={(text) => !hasSubmittedResults && handleQuantityChange(asset.assetId, parseInt(text) || 0)}
-                          keyboardType="numeric"
-                          placeholder="0"
-                          textAlign="center"
-                          editable={!hasSubmittedResults}
-                        />
-                        <TouchableOpacity 
-                          style={[styles.quantityButtonRedesigned, hasSubmittedResults && styles.disabledButton]}
-                          onPress={() => !hasSubmittedResults && handleQuantityChange(asset.assetId, countedQuantity + 1)}
-                          disabled={hasSubmittedResults}
-                        >
-                          <Ionicons name="add" size={18} color={hasSubmittedResults ? "#9CA3AF" : "#6B7280"} />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  </View>
-
-                  {!hasSubmittedResults && (
-                    <View style={styles.assetActionsRedesigned}>
-                      <TouchableOpacity 
-                        style={[styles.actionButtonRedesigned, styles.liquidationButtonRedesigned]}
-                        onPress={() => handleLiquidationAction(asset)}
-                      >
-                        <Ionicons name="trash-outline" size={16} color="#3B82F6" />
-                        <Text style={styles.actionButtonTextRedesigned}>Thanh lý</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={[styles.actionButtonRedesigned, styles.repairButtonRedesigned]}
-                        onPress={() => handleRepairAction(asset)}
-                      >
-                        <Ionicons name="build-outline" size={16} color="#F59E0B" />
-                        <Text style={styles.actionButtonTextRedesigned}>Sửa chữa</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  
-                  {hasSubmittedResults && (
-                    <View style={styles.submittedInfoContainer}>
-                      <Ionicons name="checkmark-circle" size={16} color="#10B981" />
-                      <Text style={styles.submittedInfoText}>Đã gửi kết quả</Text>
-                    </View>
-                  )}
-                </View>
-              );
-            }}
+            renderItem={({ item: asset, index }) => (
+              <AssetItem
+                asset={asset}
+                result={displayResults[asset.assetId]}
+                onQuantityChange={handleQuantityChange}
+                assetType={selectedAssetType}
+              />
+            )}
             showsVerticalScrollIndicator={false}
-            removeClippedSubviews={true}
+            removeClippedSubviews={false}
             maxToRenderPerBatch={10}
             updateCellsBatchingPeriod={50}
             initialNumToRender={10}
             windowSize={10}
-            getItemLayout={(data, index) => ({
-              length: 200, // Approximate height of each item
-              offset: 200 * index,
-              index,
-            })}
+            legacyImplementation={false}
+            disableVirtualization={false}
           />
         )}
       </View>
 
-      {/* RFID Classification Results Section - Only show if not submitted */}
-      {!hasSubmittedResults && classifyRfidsResult && (
+      {/* Temp Adjacent Assets Section - Show saved assets from neighbor rooms */}
+      {showTempAdjacentAssets && Object.keys(tempAdjacentAssets).length > 0 && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Kết quả phân loại RFID</Text>
+            <View style={styles.sectionTitleContainer}>
+              <Ionicons name="file-tray-full-outline" size={20} color="#F59E0B" />
+              <Text style={styles.sectionTitle}>Tài sản đã tạm lưu ({Object.keys(tempAdjacentAssets).length})</Text>
+            </View>
+            <View style={styles.sectionHeaderRight}>
+              {adjacentTempResultsLoading && (
+                <ActivityIndicator size="small" color="#F59E0B" style={{ marginRight: 8 }} />
+              )}
+              <TouchableOpacity
+                onPress={async () => {
+                  try {
+                    await dispatch(deleteTempAdjacentInventoryResults(roomId)).unwrap();
+                    setTempAdjacentAssets({});
+                    setShowTempAdjacentAssets(false);
+                    Alert.alert('Thành công', 'Đã xóa tài sản tạm lưu');
+                  } catch (error) {
+                    Alert.alert('Lỗi', 'Không thể xóa tài sản tạm lưu');
+                  }
+                }}
+                disabled={deleteAdjacentTempResultsLoading}
+                style={styles.deleteButtonSmall}
+              >
+                <Ionicons name="trash-outline" size={18} color="#EF4444" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowTempAdjacentAssets(!showTempAdjacentAssets)}
+                style={styles.toggleButton}
+              >
+                <Ionicons 
+                  name={showTempAdjacentAssets ? "chevron-up" : "chevron-down"} 
+                  size={20} 
+                  color="#6B7280"
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {showTempAdjacentAssets && (
+            <View>
+              {/* Simple Info Banner */}
+              <View style={styles.tempAdjacentInfoBannerSimple}>
+                <Ionicons name="bookmark-outline" size={16} color="#6B7280" />
+                <Text style={styles.tempAdjacentInfoTextSimple}>
+                  Tài sản đã lưu tạm từ phòng hàng xóm • Có thể kiểm kê lại
+                </Text>
+              </View>
+
+              {/* Asset List */}
+              <FlatList
+                data={Object.entries(tempAdjacentAssets)}
+                keyExtractor={([assetId]) => `temp-adjacent-${assetId}`}
+                style={styles.flatListContainer}
+                nestedScrollEnabled={true}
+                contentContainerStyle={styles.flatListContent}
+                renderItem={({ item: [assetId, asset], index }) => {
+                  const countedQuantity = asset.countedQuantity || 0;
+                  const systemQuantity = asset.systemQuantity || 1;
+                  const status = asset.status || AssetActionStatus.MATCHED;
+                  
+                  const getStatusInfo = (status: string) => {
+                    switch (status) {
+                      case AssetActionStatus.MATCHED:
+                        return { text: 'Khớp', color: '#10B981', bgColor: '#10B98120' };
+                      case AssetActionStatus.MISSING:
+                        return { text: 'Thiếu', color: '#EF4444', bgColor: '#EF444420' };
+                      case AssetActionStatus.EXCESS:
+                        return { text: 'Thừa', color: '#F59E0B', bgColor: '#F59E0B20' };
+                      default:
+                        return { text: 'Đã lưu', color: '#6B7280', bgColor: '#6B728020' };
+                    }
+                  };
+
+                  const statusInfo = getStatusInfo(status);
+
+                  return (
+                    <View style={styles.tempAdjacentAssetCardSimple}>
+                      <View style={styles.tempAdjacentHeader}>
+                        <View style={styles.tempAdjacentInfo}>
+                          <View style={styles.tempAdjacentLabelContainer}>
+                            <Text style={styles.tempAdjacentLabelSimple}>TẠM LƯU</Text>
+                          </View>
+                          <Text style={styles.tempAdjacentAssetId}>
+                            {asset.ktCode || asset.assetId}
+                          </Text>
+                          <Text style={styles.tempAdjacentRoomInfo}>
+                            Phòng: {asset.roomCode || asset.originalRoomId}
+                          </Text>
+                          {asset.name && (
+                            <Text style={styles.tempAdjacentAssetName} numberOfLines={1}>
+                              {asset.name}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={[styles.statusBadgeSimple, { backgroundColor: statusInfo.bgColor }]}>
+                          <Text style={[styles.statusBadgeTextSimple, { color: statusInfo.color }]}>
+                            {statusInfo.text}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.tempAdjacentQuantitySection}>
+                        <View style={styles.tempAdjacentQuantityItem}>
+                          <Text style={styles.tempAdjacentQuantityLabel}>Đã lưu</Text>
+                          <View style={styles.tempAdjacentQuantityValue}>
+                            <Text style={styles.tempAdjacentQuantityText}>{countedQuantity}</Text>
+                          </View>
+                        </View>
+                        
+                        <View style={styles.tempAdjacentQuantityItem}>
+                          <Text style={styles.tempAdjacentQuantityLabel}>Kiểm kê lại</Text>
+                          <View style={styles.tempAdjacentQuantityInputContainer}>
+                            <TouchableOpacity 
+                              style={styles.tempAdjacentQuantityButton}
+                              onPress={() => handleTempAdjacentRecheck(assetId, Math.max(0, (asset.recheckQuantity || 0) - 1))}
+                            >
+                              <Ionicons name="remove" size={20} color="#6B7280" />
+                            </TouchableOpacity>
+                            <TextInput
+                              style={styles.tempAdjacentQuantityInput}
+                              value={(asset.recheckQuantity || 0).toString()}
+                              onChangeText={(text) => handleTempAdjacentRecheck(assetId, parseInt(text) || 0)}
+                              keyboardType="numeric"
+                              placeholder="0"
+                              textAlign="center"
+                            />
+                            <TouchableOpacity 
+                              style={styles.tempAdjacentQuantityButton}
+                              onPress={() => handleTempAdjacentRecheck(assetId, (asset.recheckQuantity || 0) + 1)}
+                            >
+                              <Ionicons name="add" size={20} color="#6B7280" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+
+                      {asset.recheckQuantity !== undefined && asset.recheckQuantity !== countedQuantity && (
+                        <View style={styles.tempAdjacentUpdateNote}>
+                          <Ionicons name="alert-circle-outline" size={14} color="#F59E0B" />
+                          <Text style={styles.tempAdjacentUpdateText}>
+                            Số lượng thay đổi: {countedQuantity} → {asset.recheckQuantity}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                }}
+                showsVerticalScrollIndicator={false}
+                removeClippedSubviews={false}
+                maxToRenderPerBatch={10}
+                updateCellsBatchingPeriod={50}
+                initialNumToRender={10}
+                windowSize={10}
+              />
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* RFID Classification Results Section - Only show for FIXED_ASSET */}
+      {selectedAssetType === AssetType.FIXED_ASSET && (classifyRfidsResult || restoredClassificationResults) && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Tài sản khác</Text>
             <View style={styles.sectionHeaderRight}>
               {classifyRfidsLoading && (
                 <ActivityIndicator size="small" color="#3B82F6" style={{ marginRight: 8 }} />
@@ -1304,6 +1738,7 @@ export const InventoryScreen = () => {
                 onPress={() => {
                   dispatch(clearClassifyRfidsResult());
                   setClassifiedRfids(new Set());
+                  setRestoredClassificationResults(null);
                 }}
                 style={styles.clearButton}
               >
@@ -1313,6 +1748,7 @@ export const InventoryScreen = () => {
           </View>
 
           {/* Tab Navigation */}
+          <View style={styles.tabContainer}>
             <TouchableOpacity
               style={[
                 styles.tabButton,
@@ -1324,7 +1760,7 @@ export const InventoryScreen = () => {
                 styles.tabButtonText,
                 activeClassificationTab === 'neighbors' && styles.tabButtonTextActive
               ]}>
-                Hàng xóm ({getFilteredNeighbors().length})
+                Hàng xóm ({getFilteredNeighbors.length})
               </Text>
             </TouchableOpacity>
             
@@ -1339,31 +1775,39 @@ export const InventoryScreen = () => {
                 styles.tabButtonText,
                 activeClassificationTab === 'otherRooms' && styles.tabButtonTextActive
               ]}>
-                Phòng khác ({getFilteredOtherRooms().length})
+                Phòng khác ({getFilteredOtherRooms.length})
               </Text>
             </TouchableOpacity>
+          </View>
 
           {/* Tab Content */}
           <View style={styles.tabContent}>
             {activeClassificationTab === 'neighbors' && (
               <View>
-                {classifyRfidsResult.neighbors?.length > 0 ? (
+                {getFilteredNeighbors.length > 0 ? (
                   <View>
                     <View style={styles.tabActionHeader}>
                       <Text style={styles.tabActionText}>
-                        Tài sản hàng xóm ({classifyRfidsResult.neighbors.length})
+                        Tài sản hàng xóm ({getFilteredNeighbors.length})
                       </Text>
                       <TouchableOpacity
                         onPress={handleSaveNeighborsTemp}
-                        style={styles.saveNeighborsButton}
+                        disabled={saveAdjacentTempResultsLoading}
+                        style={[styles.saveNeighborsButton, saveAdjacentTempResultsLoading && { opacity: 0.6 }]}
                       >
-                        <Ionicons name="save-outline" size={16} color="white" />
-                        <Text style={styles.saveNeighborsButtonText}>Lưu tạm tất cả</Text>
+                        {saveAdjacentTempResultsLoading ? (
+                          <ActivityIndicator size="small" color="white" />
+                        ) : (
+                          <Ionicons name="save-outline" size={16} color="white" />
+                        )}
+                        <Text style={styles.saveNeighborsButtonText}>
+                          {saveAdjacentTempResultsLoading ? 'Đang lưu...' : 'Lưu tạm tất cả'}
+                        </Text>
                       </TouchableOpacity>
                     </View>
                     
                     <FlatList
-                      data={getFilteredNeighbors()}
+                      data={getFilteredNeighbors}
                       keyExtractor={(item) => `neighbor-${item.id}`}
                       nestedScrollEnabled={true}
                       style={styles.flatListContainer}
@@ -1390,41 +1834,41 @@ export const InventoryScreen = () => {
                         const statusInfo = getStatusInfo(status);
 
                         return (
-                          <View style={styles.assetCardRedesigned}>
-                            <View style={styles.assetHeaderRedesigned}>
-                              <View style={styles.assetInfoRedesigned}>
-                                <Text style={styles.assetCodeRedesigned}>{asset.ktCode || 'Mã tài sản'}</Text>
-                                <Text style={styles.assetNameRedesigned} numberOfLines={1}>
+                          <View style={styles.tempAdjacentAssetCardSimple}>
+                            <View style={styles.tempAdjacentHeader}>
+                              <View style={styles.tempAdjacentInfo}>
+                                <Text style={styles.tempAdjacentAssetId}>{asset.ktCode || 'Mã tài sản'}</Text>
+                                <Text style={styles.tempAdjacentRoomInfo}>Phòng: {asset.currentRoom?.roomCode || 'N/A'}</Text>
+                                <Text style={styles.tempAdjacentAssetName} numberOfLines={1}>
                                   {asset.name || 'Tên tài sản'}
                                 </Text>
-                                <Text style={styles.roomCodeText}>Phòng: {asset.currentRoomId || 'N/A'}</Text>
                               </View>
-                              <View style={[styles.statusBadgeRedesigned, { backgroundColor: statusInfo.bgColor }]}>
-                                <Text style={[styles.statusBadgeTextRedesigned, { color: statusInfo.color }]}>
+                              <View style={[styles.statusBadgeSimple, { backgroundColor: statusInfo.bgColor }]}>
+                                <Text style={[styles.statusBadgeTextSimple, { color: statusInfo.color }]}>
                                   {statusInfo.text}
                                 </Text>
                               </View>
                             </View>
 
-                            <View style={styles.quantitySectionRedesigned}>
-                              <View style={styles.quantityItemRedesigned}>
-                                <Text style={styles.quantityLabelRedesigned}>Sổ tài sản</Text>
-                                <View style={styles.quantityValueRedesigned}>
-                                  <Text style={styles.quantityTextRedesigned}>{systemQuantity}</Text>
+                            <View style={styles.tempAdjacentQuantitySection}>
+                              <View style={styles.tempAdjacentQuantityItem}>
+                                <Text style={styles.tempAdjacentQuantityLabel}>Sổ tài sản</Text>
+                                <View style={styles.tempAdjacentQuantityValue}>
+                                  <Text style={styles.tempAdjacentQuantityText}>{systemQuantity}</Text>
                                 </View>
                               </View>
                               
-                              <View style={styles.quantityItemRedesigned}>
-                                <Text style={styles.quantityLabelRedesigned}>Kiểm kê</Text>
-                                <View style={styles.quantityInputContainerRedesigned}>
+                              <View style={styles.tempAdjacentQuantityItem}>
+                                <Text style={styles.tempAdjacentQuantityLabel}>Kiểm kê</Text>
+                                <View style={styles.tempAdjacentQuantityInputContainer}>
                                   <TouchableOpacity 
-                                    style={styles.quantityButtonRedesigned}
+                                    style={styles.tempAdjacentQuantityButton}
                                     onPress={() => handleNeighborQuantityChange(asset.id, Math.max(0, countedQuantity - 1))}
                                   >
-                                    <Ionicons name="remove" size={18} color="#6B7280" />
+                                    <Ionicons name="remove" size={20} color="#6B7280" />
                                   </TouchableOpacity>
                                   <TextInput
-                                    style={styles.quantityInputRedesigned}
+                                    style={styles.tempAdjacentQuantityInput}
                                     value={countedQuantity.toString()}
                                     onChangeText={(text) => handleNeighborQuantityChange(asset.id, parseInt(text) || 0)}
                                     keyboardType="numeric"
@@ -1432,10 +1876,10 @@ export const InventoryScreen = () => {
                                     textAlign="center"
                                   />
                                   <TouchableOpacity 
-                                    style={styles.quantityButtonRedesigned}
+                                    style={styles.tempAdjacentQuantityButton}
                                     onPress={() => handleNeighborQuantityChange(asset.id, countedQuantity + 1)}
                                   >
-                                    <Ionicons name="add" size={18} color="#6B7280" />
+                                    <Ionicons name="add" size={20} color="#6B7280" />
                                   </TouchableOpacity>
                                 </View>
                               </View>
@@ -1444,16 +1888,11 @@ export const InventoryScreen = () => {
                         );
                       }}
                       showsVerticalScrollIndicator={false}
-                      removeClippedSubviews={true}
-                      maxToRenderPerBatch={5}
+                      removeClippedSubviews={false}
+                      maxToRenderPerBatch={10}
                       updateCellsBatchingPeriod={50}
-                      initialNumToRender={5}
-                      windowSize={5}
-                      getItemLayout={(data, index) => ({
-                        length: 200,
-                        offset: 200 * index,
-                        index,
-                      })}
+                      initialNumToRender={10}
+                      windowSize={10}
                     />
                   </View>
                 ) : (
@@ -1467,9 +1906,9 @@ export const InventoryScreen = () => {
 
             {activeClassificationTab === 'otherRooms' && (
               <View>
-                {getFilteredOtherRooms().length > 0 ? (
+                {getFilteredOtherRooms.length > 0 ? (
                   <FlatList
-                    data={getFilteredOtherRooms().filter((asset: any) => !removedOtherAssets.has(asset.id))}
+                    data={getFilteredOtherRooms.filter((asset: any) => !removedOtherAssets.has(asset.id))}
                     keyExtractor={(item) => `other-${item.id}`}
                     style={styles.flatListContainer}
                     nestedScrollEnabled={true}
@@ -1496,41 +1935,41 @@ export const InventoryScreen = () => {
                       const statusInfo = getStatusInfo(status);
 
                       return (
-                        <View style={styles.assetCardRedesigned}>
-                          <View style={styles.assetHeaderRedesigned}>
-                            <View style={styles.assetInfoRedesigned}>
-                              <Text style={styles.assetCodeRedesigned}>{asset.ktCode || 'Mã tài sản'}</Text>
-                              <Text style={styles.assetNameRedesigned} numberOfLines={1}>
+                        <View style={styles.tempAdjacentAssetCardSimple}>
+                          <View style={styles.tempAdjacentHeader}>
+                            <View style={styles.tempAdjacentInfo}>
+                              <Text style={styles.tempAdjacentAssetId}>{asset.ktCode || 'Mã tài sản'}</Text>
+                              <Text style={styles.tempAdjacentRoomInfo}>Phòng: {asset.currentRoom?.roomCode || 'N/A'}</Text>
+                              <Text style={styles.tempAdjacentAssetName} numberOfLines={1}>
                                 {asset.name || 'Tên tài sản'}
                               </Text>
-                              <Text style={styles.roomCodeText}>Phòng: {asset.currentRoom?.roomCode || 'N/A'}</Text>
                             </View>
-                            <View style={[styles.statusBadgeRedesigned, { backgroundColor: statusInfo.bgColor }]}>
-                              <Text style={[styles.statusBadgeTextRedesigned, { color: statusInfo.color }]}>
+                            <View style={[styles.statusBadgeSimple, { backgroundColor: statusInfo.bgColor }]}>
+                              <Text style={[styles.statusBadgeTextSimple, { color: statusInfo.color }]}>
                                 {statusInfo.text}
                               </Text>
                             </View>
                           </View>
 
-                          <View style={styles.quantitySectionRedesigned}>
-                            <View style={styles.quantityItemRedesigned}>
-                              <Text style={styles.quantityLabelRedesigned}>Sổ tài sản</Text>
-                              <View style={styles.quantityValueRedesigned}>
-                                <Text style={styles.quantityTextRedesigned}>{systemQuantity}</Text>
+                          <View style={styles.tempAdjacentQuantitySection}>
+                            <View style={styles.tempAdjacentQuantityItem}>
+                              <Text style={styles.tempAdjacentQuantityLabel}>Sổ tài sản</Text>
+                              <View style={styles.tempAdjacentQuantityValue}>
+                                <Text style={styles.tempAdjacentQuantityText}>{systemQuantity}</Text>
                               </View>
                             </View>
                             
-                            <View style={styles.quantityItemRedesigned}>
-                              <Text style={styles.quantityLabelRedesigned}>Kiểm kê</Text>
-                              <View style={styles.quantityInputContainerRedesigned}>
+                            <View style={styles.tempAdjacentQuantityItem}>
+                              <Text style={styles.tempAdjacentQuantityLabel}>Kiểm kê</Text>
+                              <View style={styles.tempAdjacentQuantityInputContainer}>
                                 <TouchableOpacity 
-                                  style={styles.quantityButtonRedesigned}
+                                  style={styles.tempAdjacentQuantityButton}
                                   onPress={() => handleOtherRoomQuantityChange(asset.id, Math.max(0, countedQuantity - 1))}
                                 >
-                                  <Ionicons name="remove" size={18} color="#6B7280" />
+                                  <Ionicons name="remove" size={20} color="#6B7280" />
                                 </TouchableOpacity>
                                 <TextInput
-                                  style={styles.quantityInputRedesigned}
+                                  style={styles.tempAdjacentQuantityInput}
                                   value={countedQuantity.toString()}
                                   onChangeText={(text) => handleOtherRoomQuantityChange(asset.id, parseInt(text) || 0)}
                                   keyboardType="numeric"
@@ -1538,10 +1977,10 @@ export const InventoryScreen = () => {
                                   textAlign="center"
                                 />
                                 <TouchableOpacity 
-                                  style={styles.quantityButtonRedesigned}
+                                  style={styles.tempAdjacentQuantityButton}
                                   onPress={() => handleOtherRoomQuantityChange(asset.id, countedQuantity + 1)}
                                 >
-                                  <Ionicons name="add" size={18} color="#6B7280" />
+                                  <Ionicons name="add" size={20} color="#6B7280" />
                                 </TouchableOpacity>
                               </View>
                             </View>
@@ -1580,16 +2019,11 @@ export const InventoryScreen = () => {
                       );
                     }}
                     showsVerticalScrollIndicator={false}
-                    removeClippedSubviews={true}
-                    maxToRenderPerBatch={5}
+                    removeClippedSubviews={false}
+                    maxToRenderPerBatch={10}
                     updateCellsBatchingPeriod={50}
-                    initialNumToRender={5}
-                    windowSize={5}
-                    getItemLayout={(data, index) => ({
-                      length: 200,
-                      offset: 200 * index,
-                      index,
-                    })}
+                    initialNumToRender={10}
+                    windowSize={10}
                   />
                 ) : (
                   <View style={styles.emptyTabState}>
@@ -1603,73 +2037,45 @@ export const InventoryScreen = () => {
         </View>
       )}
 
-      {/* Action Buttons Section - Only show if not submitted */}
-      {!hasSubmittedResults && (
-        <View style={styles.section}>
-          <View style={styles.actionButtonsContainer}>
-            <TouchableOpacity
-              onPress={handleSaveTempResults}
-              disabled={saveTempResultsLoading}
-              style={[styles.actionButtonLarge, styles.saveTempButton]}
-            >
-              {saveTempResultsLoading ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <Ionicons name="save-outline" size={20} color="white" />
-              )}
-              <Text style={styles.actionButtonLargeText}>
-                {saveTempResultsLoading ? 'Đang lưu...' : 'Lưu tạm'}
-              </Text>
-            </TouchableOpacity>
+      {/* Action Buttons Section */}
+      <View style={styles.section}>
+        <View style={styles.actionButtonsContainer}>
+          <TouchableOpacity
+            onPress={handleSaveTempResults}
+            style={[styles.actionButtonLarge, styles.saveTempButton]}
+          >
+            <Ionicons name="save-outline" size={20} color="white" />
+            <Text style={styles.actionButtonLargeText}>Lưu tạm</Text>
+          </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleDeleteTempResults}
-              style={[styles.actionButtonLarge, styles.deleteTempButton]}
-            >
-              <Ionicons name="trash-outline" size={20} color="white" />
-              <Text style={styles.actionButtonLargeText}>Xóa tạm</Text>
-            </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleDeleteTempResults}
+            style={[styles.actionButtonLarge, styles.deleteTempButton]}
+          >
+            <Ionicons name="trash-outline" size={20} color="white" />
+            <Text style={styles.actionButtonLargeText}>Xóa tạm</Text>
+          </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleSubmitResults}
-              disabled={submitResultLoading}
-              style={[styles.actionButtonLarge, styles.submitButton]}
-            >
-              {submitResultLoading ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <Ionicons name="checkmark-circle-outline" size={20} color="white" />
-              )}
-              <Text style={styles.actionButtonLargeText}>
-                {submitResultLoading ? 'Đang gửi...' : 'Lưu kết quả'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {/* Submitted Results Info - Only show if submitted */}
-      {hasSubmittedResults && (
-        <View style={styles.section}>
-          <View style={styles.submittedResultsInfo}>
-            <Ionicons name="checkmark-circle" size={24} color="#10B981" />
-            <Text style={styles.submittedResultsTitle}>Phòng đã hoàn thành kiểm kê</Text>
-            <Text style={styles.submittedResultsSubtitle}>
-              Kết quả đã được gửi và không thể chỉnh sửa
+          <TouchableOpacity
+            onPress={handleSubmitResults}
+            disabled={submitResultLoading}
+            style={[styles.actionButtonLarge, styles.submitButton]}
+          >
+            {submitResultLoading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="checkmark-circle-outline" size={20} color="white" />
+            )}
+            <Text style={styles.actionButtonLargeText}>
+              {submitResultLoading ? 'Đang gửi...' : 'Lưu kết quả'}
             </Text>
-          </View>
+          </TouchableOpacity>
         </View>
-      )}
+      </View>
+
+
       </ScrollView>
       
-      {/* Action Modal - Outside ScrollView */}
-      <ActionModal
-        visible={showActionModal}
-        onClose={handleCloseActionModal}
-        asset={selectedAsset}
-        actionType={actionType}
-        onConfirm={handleActionConfirm}
-      />
     </View>
   );
 };
@@ -1859,96 +2265,7 @@ const styles = StyleSheet.create({
   selectDeviceButton: {
     backgroundColor: '#6B7280',
   },
-  assetCard: {
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 12,
-  },
-  assetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  assetInfo: {
-    flex: 1,
-  },
-  assetName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 4,
-  },
-  assetSpecs: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  assetStatus: {
-    marginLeft: 12,
-  },
-  quantitySection: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  quantityItem: {
-    flex: 1,
-    marginHorizontal: 4,
-  },
-  quantityLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginBottom: 4,
-  },
-  quantityValue: {
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  quantityText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#111827',
-  },
-  quantityInput: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  assetActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  liquidationButton: {
-    borderColor: '#3B82F6',
-    backgroundColor: '#EBF8FF',
-  },
-  repairButton: {
-    borderColor: '#F59E0B',
-    backgroundColor: '#FFFBEB',
-  },
-  actionButtonText: {
-    fontSize: 12,
-    fontWeight: '500',
-    marginLeft: 4,
-  },
+
   actionButtonsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1964,7 +2281,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   saveTempButton: {
-    backgroundColor: '#6B7280',
+    backgroundColor: '#3B82F6', // Blue color for save temp
   },
   deleteTempButton: {
     backgroundColor: '#F59E0B',
@@ -2068,147 +2385,7 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     marginTop: 2,
   },
-  // Compact styles
-  assetCardCompact: {
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 6,
-    backgroundColor: 'white',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  assetHeaderCompact: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 6,
-  },
-  assetInfoCompact: {
-    flex: 1,
-    marginRight: 8,
-  },
-  assetCodeCompact: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 1,
-  },
-  assetNameCompact: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#374151',
-    marginBottom: 1,
-    lineHeight: 14,
-  },
-  assetSpecsCompact: {
-    fontSize: 10,
-    color: '#6B7280',
-    lineHeight: 12,
-  },
-  statusBadgeCompact: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    alignSelf: 'flex-start',
-  },
-  statusBadgeTextCompact: {
-    fontSize: 9,
-    fontWeight: '600',
-  },
-  quantitySectionCompact: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  quantityItemCompact: {
-    flex: 1,
-    marginHorizontal: 2,
-  },
-  quantityLabelCompact: {
-    fontSize: 9,
-    color: '#6B7280',
-    marginBottom: 3,
-    textAlign: 'center',
-  },
-  quantityValueCompact: {
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    borderRadius: 4,
-    alignItems: 'center',
-  },
-  quantityTextCompact: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  quantityInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 4,
-    backgroundColor: 'white',
-    minHeight: 28,
-  },
-  quantityButton: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 24,
-  },
-  quantityInputCompact: {
-    flex: 1,
-    paddingVertical: 4,
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#111827',
-    textAlign: 'center',
-    minWidth: 30,
-  },
-  assetActionsCompact: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 4,
-  },
-  actionButtonCompact: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 3,
-    borderWidth: 1,
-  },
-  liquidationButtonCompact: {
-    borderColor: '#3B82F6',
-    backgroundColor: '#EBF8FF',
-  },
-  repairButtonCompact: {
-    borderColor: '#F59E0B',
-    backgroundColor: '#FFFBEB',
-  },
-  actionButtonTextCompact: {
-    fontSize: 9,
-    fontWeight: '500',
-    marginLeft: 2,
-  },
-  rfidInfoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 2,
-  },
-  rfidInfoText: {
-    fontSize: 9,
-    color: '#10B981',
-    marginLeft: 4,
-    fontWeight: '500',
-  },
+
   // Redesigned Asset Card Styles
   assetCardRedesigned: {
     borderWidth: 1,
@@ -2234,17 +2411,17 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   assetCodeRedesigned: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 4,
   },
   assetNameRedesigned: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     color: '#374151',
     marginBottom: 8,
-    lineHeight: 20,
+    lineHeight: 22,
   },
   rfidInfoContainerRedesigned: {
     flexDirection: 'row',
@@ -2303,11 +2480,12 @@ const styles = StyleSheet.create({
     minHeight: 40,
   },
   quantityButtonRedesigned: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 40,
+    minWidth: 48,
+    minHeight: 48,
   },
   quantityInputRedesigned: {
     flex: 1,
@@ -2317,34 +2495,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     textAlign: 'center',
     minWidth: 50,
-  },
-  assetActionsRedesigned: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-  },
-  actionButtonRedesigned: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    minWidth: 100,
-    justifyContent: 'center',
-  },
-  liquidationButtonRedesigned: {
-    borderColor: '#3B82F6',
-    backgroundColor: '#EBF8FF',
-  },
-  repairButtonRedesigned: {
-    borderColor: '#F59E0B',
-    backgroundColor: '#FFFBEB',
-  },
-  actionButtonTextRedesigned: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 6,
   },
   // Room Info & Statistics styles
   roomInfoSection: {
@@ -2406,9 +2556,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   statCard: {
-    width: '30%',
     padding: 12,
     borderRadius: 8,
+    flex: 1,
+    marginHorizontal: 8,
     alignItems: 'center',
     marginBottom: 8,
   },
@@ -2480,7 +2631,7 @@ const styles = StyleSheet.create({
   },
   // FlatList Styles
   flatListContainer: {
-    maxHeight: 800, // Set maximum height for FlatList
+    maxHeight: 600, // Set maximum height for FlatList
   },
   flatListContent: {
     paddingBottom: 16, // Add padding at bottom
@@ -2608,47 +2759,217 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginLeft: 4,
   },
-  // Disabled styles
-  disabledButton: {
-    opacity: 0.5,
-  },
-  disabledInput: {
-    backgroundColor: '#F3F4F6',
-    color: '#9CA3AF',
-  },
-  // Submitted results styles
-  submittedInfoContainer: {
+
+  // Temp Adjacent Assets Styles - Simple Version
+  tempAdjacentInfoBannerSimple: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: '#F0FDF4',
-    borderRadius: 8,
+    backgroundColor: '#F9FAFB',
     borderWidth: 1,
-    borderColor: '#D1FAE5',
+    borderColor: '#E5E7EB',
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 12,
   },
-  submittedInfoText: {
+  tempAdjacentInfoTextSimple: {
     fontSize: 12,
-    fontWeight: '500',
-    color: '#10B981',
+    color: '#6B7280',
     marginLeft: 6,
   },
-  submittedResultsInfo: {
-    alignItems: 'center',
-    paddingVertical: 20,
-    paddingHorizontal: 16,
+  tempAdjacentAssetCardSimple: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    backgroundColor: 'white',
   },
-  submittedResultsTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#10B981',
-    marginTop: 8,
+  tempAdjacentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  tempAdjacentInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  tempAdjacentLabelContainer: {
     marginBottom: 4,
   },
-  submittedResultsSubtitle: {
-    fontSize: 14,
+  tempAdjacentLabelSimple: {
+    fontSize: 9,
+    fontWeight: '600',
     color: '#6B7280',
-    textAlign: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 3,
+    alignSelf: 'flex-start',
   },
+  tempAdjacentAssetId: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  tempAdjacentRoomInfo: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  tempAdjacentAssetName: {
+    fontSize: 14,
+    color: '#374151',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  tempAdjacentLocationText: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  statusBadgeSimple: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  statusBadgeTextSimple: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  tempAdjacentQuantitySection: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  fixedAssetConfirmSection: {
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  confirmButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    borderColor: '#10B981',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  confirmButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#10B981',
+  },
+  tempAdjacentQuantityItem: {
+    flex: 1,
+  },
+  tempAdjacentQuantityLabel: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginBottom: 6,
+    fontWeight: '500',
+  },
+  tempAdjacentQuantityValue: {
+    backgroundColor: '#F9FAFB',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 4,
+    alignItems: 'center',
+  },
+  tempAdjacentQuantityText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  tempAdjacentQuantityInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 4,
+    backgroundColor: 'white',
+  },
+  tempAdjacentQuantityButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 44,
+    minHeight: 44,
+  },
+  tempAdjacentQuantityInput: {
+    flex: 1,
+    paddingVertical: 6,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111827',
+    textAlign: 'center',
+    minWidth: 40,
+  },
+  tempAdjacentUpdateNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  tempAdjacentUpdateText: {
+    fontSize: 11,
+    color: '#F59E0B',
+    marginLeft: 4,
+    fontWeight: '500',
+  },
+  deleteButtonSmall: {
+    padding: 8,
+    marginRight: 8,
+  },
+  
+  // Unscanned Asset Styles
+  unscannedAssetCard: {
+    borderColor: '#F59E0B',
+    borderWidth: 2,
+    backgroundColor: '#FFFBEB',
+  },
+  unscannedIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  unscannedText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#F59E0B',
+    marginLeft: 4,
+  },
+  unscannedCounter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  unscannedCounterText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#F59E0B',
+    marginLeft: 4,
+  },
+  
+  // Tools Equipment Card Style
+  toolsEquipmentCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E5E7EB',
+    borderWidth: 1,
+  },
+
 });
