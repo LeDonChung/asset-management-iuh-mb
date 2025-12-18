@@ -833,6 +833,7 @@ export const InventoryScreen = () => {
       await dispatch(submitInventoryResult(submitData)).unwrap();
       Alert.alert('Thành công', 'Đã gửi kết quả kiểm kê thành công');
     } catch (error) {
+        console.error('❌ Submit Error:', error);
       Alert.alert('Lỗi', 'Không thể gửi kết quả kiểm kê');
     }
   };

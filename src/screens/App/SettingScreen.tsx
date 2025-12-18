@@ -46,6 +46,7 @@ export const SettingScreen = () => {
   const scannedTagsCount = useSelector((state: RootState) => state.device.scannedTagsCount);
   const scannedTagsMap = useSelector((state: RootState) => state.device.scannedTagsMap);
   const [isFetching, setIsFetching] = useState(false);
+  const [customPowerInput, setCustomPowerInput] = useState('');
   
   // Alert mode configuration states
   const [alertSettings, setAlertSettings] = useState({
@@ -187,6 +188,32 @@ export const SettingScreen = () => {
     if (power !== deviceInfo.power && device) {
       setIsFetching(true);
       dispatch(setDevicePower({ device, power }));
+    }
+    setIsFetching(false);
+  };
+
+  const handlerCustomPowerInput = (text: string) => {
+    // Chỉ cho phép nhập số
+    const numericValue = text.replace(/[^0-9]/g, '');
+    setCustomPowerInput(numericValue);
+  };
+
+  const handlerApplyCustomPower = () => {
+    const powerValue = parseInt(customPowerInput, 10);
+    
+    // Validate giá trị từ 0-33
+    if (isNaN(powerValue) || powerValue < 0 || powerValue > 33) {
+      dispatch(addLog({
+        message: 'Giá trị công suất phải từ 0-33 dBm',
+        timestamp: new Date().toLocaleTimeString(),
+      }));
+      return;
+    }
+
+    if (powerValue !== deviceInfo.power && device) {
+      setIsFetching(true);
+      dispatch(setDevicePower({ device, power: powerValue }));
+      setCustomPowerInput(''); // Clear input sau khi apply
     }
     setIsFetching(false);
   };
@@ -1078,6 +1105,70 @@ export const SettingScreen = () => {
                   <Picker.Item key={dbm} label={`${dbm} dBm`} value={dbm} />
                 ))}
               </Picker>
+            </View>
+
+            {/* Custom Power Input */}
+            <View style={{ marginTop: 16 }}>
+              <Text style={{
+                fontSize: 14,
+                fontWeight: '500',
+                color: '#64748b',
+                marginBottom: 8,
+              }}>
+                Hoặc nhập giá trị tùy chỉnh (0-33)
+              </Text>
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+              }}>
+                <TextInput
+                  style={{
+                    flex: 1,
+                    borderWidth: 1,
+                    borderColor: '#d1d5db',
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    backgroundColor: '#fff',
+                    fontSize: 14,
+                    marginRight: 8,
+                  }}
+                  placeholder="Nhập giá trị 0-33"
+                  value={customPowerInput}
+                  onChangeText={handlerCustomPowerInput}
+                  keyboardType="numeric"
+                  maxLength={2}
+                  placeholderTextColor="#9ca3af"
+                />
+                <TouchableOpacity
+                  onPress={handlerApplyCustomPower}
+                  disabled={!customPowerInput || isFetching}
+                  style={{
+                    backgroundColor: customPowerInput && !isFetching ? '#3b82f6' : '#6b7280',
+                    paddingHorizontal: 16,
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    shadowColor: '#3b82f6',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.2,
+                    shadowRadius: 4,
+                    elevation: 3,
+                  }}
+                >
+                  {isFetching ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark" size={16} color="white" style={{ marginRight: 4 }} />
+                      <Text style={{ color: 'white', fontSize: 14, fontWeight: '500' }}>
+                        Áp dụng
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
 
